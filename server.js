@@ -12,16 +12,17 @@ app.use(express.json({
 }));
 
 // ============ CONFIGURAÇÕES (vêm de variáveis de ambiente no Railway) ============
-const VERIFY_TOKEN     = process.env.VERIFY_TOKEN;      // você inventa, ex: "meu_token_secreto_123"
-const APP_SECRET       = process.env.APP_SECRET;        // do app no Meta for Developers
-const ACCESS_TOKEN     = process.env.ACCESS_TOKEN;      // token de acesso longa duração do IG
-const IG_USER_ID       = process.env.IG_USER_ID;        // ID numérico da sua conta IG profissional
+const VERIFY_TOKEN     = process.env.VERIFY_TOKEN;
+const APP_SECRET       = process.env.APP_SECRET;
+const ACCESS_TOKEN     = process.env.ACCESS_TOKEN;
+const IG_USER_ID       = process.env.IG_USER_ID;
 const PALAVRA_CHAVE    = (process.env.PALAVRA_CHAVE || 'FINANCEIRO').toUpperCase();
-const LINK_PLANILHA    = process.env.LINK_PLANILHA;     // link do Google Drive/Sheets público
+const LINK_PLANILHA    = process.env.LINK_PLANILHA;
+const MENSAGEM_COMENTARIO = process.env.MENSAGEM_COMENTARIO || 'te mandei no direct! 📩';
 const MENSAGEM_DM      = process.env.MENSAGEM_DM ||
   `Oi! 👋 Aqui está sua planilha de finanças pessoais gratuita:\n\n${process.env.LINK_PLANILHA}\n\nQualquer dúvida, é só responder este chat. — @albertobri7o`;
 
-// Para evitar processar o mesmo comentário 2x (Meta às vezes manda eventos duplicados)
+// Para evitar processar o mesmo comentário 2x
 const comentariosProcessados = new Set();
 
 // ============ HEALTHCHECK ============
@@ -29,7 +30,7 @@ app.get('/', (req, res) => {
   res.send('Bot do Instagram rodando ✅');
 });
 
-// ============ VERIFICAÇÃO DO WEBHOOK (Meta chama isso 1 vez ao configurar) ============
+// ============ VERIFICAÇÃO DO WEBHOOK ============
 app.get('/webhook', (req, res) => {
   const mode      = req.query['hub.mode'];
   const token     = req.query['hub.verify_token'];
@@ -58,7 +59,6 @@ function assinaturaValida(req) {
 
 // ============ RECEBE EVENTOS DA META ============
 app.post('/webhook', async (req, res) => {
-  // Responde rápido pra Meta não dar timeout (precisa responder em < 5s)
   res.sendStatus(200);
 
   if (!assinaturaValida(req)) {
@@ -86,7 +86,6 @@ async function processarComentario(comentario) {
   if (comentariosProcessados.has(commentId)) return;
   comentariosProcessados.add(commentId);
 
-  // Limpa o cache periodicamente para não vazar memória
   if (comentariosProcessados.size > 5000) {
     const arr = [...comentariosProcessados].slice(-2500);
     comentariosProcessados.clear();
@@ -103,14 +102,14 @@ async function processarComentario(comentario) {
   const userId = from?.id;
   console.log(`🎯 Match! @${username} comentou "${text}"`);
 
-  // 1. Responde publicamente ao comentário (boas práticas: convida pra DM)
+  // 1. Responde publicamente ao comentário
   try {
-    await responderComentario(commentId, `@${username} te mandei no direct! 📩`);
+    await responderComentario(commentId, `@${username} ${MENSAGEM_COMENTARIO}`);
   } catch (e) {
     console.error('Erro ao responder comentário:', e.message);
   }
 
-  // 2. Envia DM com o link da planilha
+  // 2. Envia DM com o link
   if (userId) {
     try {
       await enviarDM(userId, MENSAGEM_DM);
@@ -137,7 +136,6 @@ async function responderComentario(commentId, mensagem) {
 }
 
 async function enviarDM(igUserId, mensagem) {
-  // Endpoint de mensagens da Instagram Messaging API
   const url = `https://graph.instagram.com/v21.0/${IG_USER_ID}/messages`;
   const res = await fetch(url, {
     method: 'POST',
