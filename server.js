@@ -1,160 +1,314 @@
 // server.js — Webhook Instagram para responder comentários com palavra-chave
-// Autor: bot para @albertobri7o
+// Autor: @albertobri7o
 
 import express from 'express';
 import crypto from 'crypto';
 
 const app = express();
 
-// IMPORTANTE: precisamos do raw body para validar a assinatura da Meta
+// Precisamos do raw body para validar a assinatura da Meta
 app.use(express.json({
-  verify: (req, res, buf) => { req.rawBody = buf; }
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
 }));
 
-// ============ CONFIGURAÇÕES (vêm de variáveis de ambiente no Railway) ============
-const VERIFY_TOKEN     = process.env.VERIFY_TOKEN;
-const APP_SECRET       = process.env.APP_SECRET;
-const ACCESS_TOKEN     = process.env.ACCESS_TOKEN;
-const IG_USER_ID       = process.env.IG_USER_ID;
-const PALAVRA_CHAVE    = (process.env.PALAVRA_CHAVE || 'FINANCEIRO').toUpperCase();
-const LINK_PLANILHA    = process.env.LINK_PLANILHA;
-const MENSAGEM_COMENTARIO = process.env.MENSAGEM_COMENTARIO || 'te mandei no direct! 📩';
-const MENSAGEM_DM      = process.env.MENSAGEM_DM ||
-  `Oi! 👋 Aqui está sua planilha de finanças pessoais gratuita:\n\n${process.env.LINK_PLANILHA}\n\nQualquer dúvida, é só responder este chat. — @albertobri7o`;
+// ================= CONFIGURAÇÕES =================
 
-// Para evitar processar o mesmo comentário 2x
-const comentariosProcessados = new Set();
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+const APP_SECRET = process.env.APP_SECRET;
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 
-// ============ HEALTHCHECK ============
+// ID da conta profissional do Instagram
+const IG_USER_ID = process.env.IG_USER_ID;
+
+// ID da Página do Facebook conectada ao Instagram
+// Usado no endpoint de Private Reply
+const PAGE_ID = process.env.PAGE_ID;
+
+const GRAPH_VERSION = process.env.GRAPH_VERSION || 'v21.0';
+
+const LINK_PLANILHA = process.env.LINK_PLANILHA;
+
+const PALAVRA_CHAVE = normalizar(
+  process.env.PALAVRA_CHAVE || 'FINANCEIRO'
+);
+
+const MENSAGEM_COMENTARIO =
+  process.env.MENSAGEM_COMENTARIO || 'te mandei no direct! 📩';
+
+const MENSAGEM_COMENTARIO_ERRO =
+  process.env.MENSAGEM_COMENTARIO_ERRO ||
+  'não consegui mandar automático, me chama no direct que eu te envio 📩';
+
+const MENSAGEM_DM =
+  process.env.MENSAGEM_DM ||
+  `Oi! 👋 Aqui está sua planilha de finanças pessoais gratuita:\n\n${LINK_PLANILHA}\n\nQualquer dúvida, é só responder este chat.\n\n— @albertobri7o`;
+
+const RESPONDER_PUBLICO =
+  (process.env.RESPONDER_PUBLICO || 'true').toLowerCase() === 'true';
+
+const ENVIAR_PRIVATE_REPLY =
+  (process.env.ENVIAR_PRIVATE_REPLY || 'true').toLowerCase() === 'true';
+
+// Cache simples para evitar processar o mesmo comentário 2x
+// Em produção com mais de uma instância, o ideal é Redis/Postgres.
+const comentariosProcessados = new Map();
+
+const TEMPO_CACHE_MS = Number(
+  process.env.TEMPO_CACHE_MS || 1000 * 60 * 60 * 24
+);
+
+// ================= HEALTHCHECK =================
+
 app.get('/', (req, res) => {
   res.send('Bot do Instagram rodando ✅');
 });
 
-// ============ VERIFICAÇÃO DO WEBHOOK ============
+// ================= VERIFICAÇÃO DO WEBHOOK =================
+
 app.get('/webhook', (req, res) => {
-  const mode      = req.query['hub.mode'];
-  const token     = req.query['hub.verify_token'];
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
   if (mode === 'subscribe' && token === VERIFY_TOKEN) {
     console.log('✅ Webhook verificado pela Meta');
     return res.status(200).send(challenge);
   }
-  console.warn('⚠️  Tentativa de verificação rejeitada');
+
+  console.warn('⚠️ Tentativa de verificação rejeitada');
   return res.sendStatus(403);
 });
 
-// ============ VALIDAÇÃO DA ASSINATURA ============
-function assinaturaValida(req) {
-  const signature = req.get('x-hub-signature-256');
-  if (!signature || !APP_SECRET) return false;
-  const expected = 'sha256=' + crypto
-    .createHmac('sha256', APP_SECRET)
-    .update(req.rawBody)
-    .digest('hex');
-  try {
-    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
-  } catch { return false; }
-}
+// ================= RECEBE EVENTOS DA META =================
 
-// ============ RECEBE EVENTOS DA META ============
 app.post('/webhook', async (req, res) => {
-  res.sendStatus(200);
-
   if (!assinaturaValida(req)) {
-    console.warn('⚠️  Assinatura inválida — ignorando');
-    return;
+    console.warn('⚠️ Assinatura inválida — ignorando evento');
+    return res.sendStatus(403);
   }
 
-  const body = req.body;
-  if (body.object !== 'instagram') return;
+  // Responde rápido para a Meta não reenviar o evento por timeout
+  res.sendStatus(200);
 
-  for (const entry of (body.entry || [])) {
-    for (const change of (entry.changes || [])) {
-      if (change.field === 'comments') {
-        await processarComentario(change.value);
+  try {
+    const body = req.body;
+
+    if (body.object !== 'instagram') {
+      console.log('Evento ignorado: object diferente de instagram');
+      return;
+    }
+
+    for (const entry of body.entry || []) {
+      for (const change of entry.changes || []) {
+        if (change.field === 'comments') {
+          await processarComentario(change.value);
+        }
       }
     }
+  } catch (error) {
+    console.error('❌ Erro geral no webhook:', error.message);
   }
 });
 
-// ============ LÓGICA PRINCIPAL ============
+// ================= LÓGICA PRINCIPAL =================
+
 async function processarComentario(comentario) {
-  const { id: commentId, text, from } = comentario;
+  const commentId = comentario?.id;
+  const text = comentario?.text;
+  const username = comentario?.from?.username || 'seguidor';
 
-  if (!text || !commentId) return;
-  if (comentariosProcessados.has(commentId)) return;
-  comentariosProcessados.add(commentId);
-
-  if (comentariosProcessados.size > 5000) {
-    const arr = [...comentariosProcessados].slice(-2500);
-    comentariosProcessados.clear();
-    arr.forEach(id => comentariosProcessados.add(id));
-  }
-
-  const textoNormalizado = text.toUpperCase().trim();
-  if (!textoNormalizado.includes(PALAVRA_CHAVE)) {
-    console.log(`💬 Comentário ignorado (sem palavra-chave): "${text}"`);
+  if (!commentId || !text) {
+    console.log('Comentário ignorado: sem id ou sem texto');
     return;
   }
 
-  const username = from?.username || 'seguidor';
-  const userId = from?.id;
-  console.log(`🎯 Match! @${username} comentou "${text}"`);
+  limparCacheProcessados();
 
-  // 1. Responde publicamente ao comentário
-  try {
-    await responderComentario(commentId, `@${username} ${MENSAGEM_COMENTARIO}`);
-  } catch (e) {
-    console.error('Erro ao responder comentário:', e.message);
+  if (comentariosProcessados.has(commentId)) {
+    console.log(`Comentário já processado: ${commentId}`);
+    return;
   }
 
-  // 2. Envia DM com o link
-  if (userId) {
+  const textoNormalizado = normalizar(text);
+
+  if (!textoNormalizado.includes(PALAVRA_CHAVE)) {
+    console.log(`💬 Comentário ignorado: "${text}"`);
+    return;
+  }
+
+  comentariosProcessados.set(commentId, Date.now());
+
+  console.log(`🎯 Match! @${username} comentou: "${text}"`);
+
+  let dmEnviada = false;
+
+  // 1. Envia direct via Private Reply
+  if (ENVIAR_PRIVATE_REPLY) {
     try {
-      await enviarDM(userId, MENSAGEM_DM);
-      console.log(`✅ DM enviada para @${username}`);
-    } catch (e) {
-      console.error(`❌ Erro ao enviar DM para @${username}:`, e.message);
+      await enviarPrivateReply(commentId, MENSAGEM_DM);
+      dmEnviada = true;
+      console.log(`✅ Private Reply enviada para @${username}`);
+    } catch (error) {
+      console.error(
+        `❌ Erro ao enviar Private Reply para @${username}:`,
+        error.message
+      );
+    }
+  }
+
+  // 2. Responde publicamente ao comentário
+  if (RESPONDER_PUBLICO) {
+    const mensagemPublica = dmEnviada
+      ? `@${username} ${MENSAGEM_COMENTARIO}`
+      : `@${username} ${MENSAGEM_COMENTARIO_ERRO}`;
+
+    try {
+      await responderComentario(commentId, mensagemPublica);
+      console.log(`✅ Comentário público respondido para @${username}`);
+    } catch (error) {
+      console.error(
+        `❌ Erro ao responder comentário de @${username}:`,
+        error.message
+      );
     }
   }
 }
 
-// ============ CHAMADAS À GRAPH API ============
+// ================= CHAMADAS À GRAPH API =================
+
 async function responderComentario(commentId, mensagem) {
-  const url = `https://graph.instagram.com/v21.0/${commentId}/replies`;
-  const res = await fetch(url, {
+  if (!ACCESS_TOKEN) {
+    throw new Error('ACCESS_TOKEN não configurado');
+  }
+
+  const url = `https://graph.instagram.com/${GRAPH_VERSION}/${commentId}/replies`;
+
+  const params = new URLSearchParams();
+  params.append('message', mensagem);
+
+  const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message: mensagem,
-      access_token: ACCESS_TOKEN
-    })
+    headers: {
+      Authorization: `Bearer ${ACCESS_TOKEN}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: params
   });
-  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-  return res.json();
+
+  if (!response.ok) {
+    throw new Error(`${response.status}: ${await response.text()}`);
+  }
+
+  return response.json();
 }
 
-async function enviarDM(igUserId, mensagem) {
-  const url = `https://graph.instagram.com/v21.0/${IG_USER_ID}/messages`;
-  const res = await fetch(url, {
+async function enviarPrivateReply(commentId, mensagem) {
+  if (!ACCESS_TOKEN) {
+    throw new Error('ACCESS_TOKEN não configurado');
+  }
+
+  if (!PAGE_ID) {
+    throw new Error('PAGE_ID não configurado');
+  }
+
+  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${PAGE_ID}/messages`;
+
+  const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      Authorization: `Bearer ${ACCESS_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
     body: JSON.stringify({
-      recipient: { id: igUserId },
-      message: { text: mensagem },
-      access_token: ACCESS_TOKEN
+      recipient: {
+        comment_id: commentId
+      },
+      message: {
+        text: mensagem
+      }
     })
   });
-  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-  return res.json();
+
+  if (!response.ok) {
+    throw new Error(`${response.status}: ${await response.text()}`);
+  }
+
+  return response.json();
 }
 
-// ============ START ============
+// ================= FUNÇÕES AUXILIARES =================
+
+function assinaturaValida(req) {
+  const signature = req.get('x-hub-signature-256');
+
+  if (!signature || !APP_SECRET || !req.rawBody) {
+    return false;
+  }
+
+  const expectedSignature =
+    'sha256=' +
+    crypto
+      .createHmac('sha256', APP_SECRET)
+      .update(req.rawBody)
+      .digest('hex');
+
+  const signatureBuffer = Buffer.from(signature, 'utf8');
+  const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+
+  if (signatureBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(signatureBuffer, expectedBuffer);
+}
+
+function normalizar(texto = '') {
+  return texto
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .trim();
+}
+
+function limparCacheProcessados() {
+  const agora = Date.now();
+
+  for (const [commentId, criadoEm] of comentariosProcessados.entries()) {
+    if (agora - criadoEm > TEMPO_CACHE_MS) {
+      comentariosProcessados.delete(commentId);
+    }
+  }
+}
+
+function validarVariaveis() {
+  const variaveis = {
+    VERIFY_TOKEN,
+    APP_SECRET,
+    ACCESS_TOKEN,
+    IG_USER_ID,
+    PAGE_ID,
+    LINK_PLANILHA
+  };
+
+  for (const [nome, valor] of Object.entries(variaveis)) {
+    if (!valor) {
+      console.warn(`⚠️ Variável ausente no Railway: ${nome}`);
+    }
+  }
+}
+
+// ================= START =================
+
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
+  validarVariaveis();
+
   console.log(`🚀 Servidor ouvindo na porta ${PORT}`);
-  console.log(`   Palavra-chave: ${PALAVRA_CHAVE}`);
-  console.log(`   IG User ID configurado: ${IG_USER_ID ? '✅' : '❌ FALTANDO'}`);
-  console.log(`   Access Token configurado: ${ACCESS_TOKEN ? '✅' : '❌ FALTANDO'}`);
+  console.log(`🔑 Palavra-chave: ${PALAVRA_CHAVE}`);
+  console.log(`👤 IG_USER_ID configurado: ${IG_USER_ID ? '✅' : '❌'}`);
+  console.log(`📄 PAGE_ID configurado: ${PAGE_ID ? '✅' : '❌'}`);
+  console.log(`🔐 ACCESS_TOKEN configurado: ${ACCESS_TOKEN ? '✅' : '❌'}`);
 });
