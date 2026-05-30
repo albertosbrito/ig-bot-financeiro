@@ -1,16 +1,16 @@
 {
-  "name": "ig-comment-bot",
+  "name": "bot-instagram-comentarios",
   "version": "1.0.0",
-  "description": "Bot que responde comentários do Instagram com palavra-chave e envia DM",
   "type": "module",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
+  "dependencies": {
+    "express": "^4.18.3",
+    "openai": "^6.0.0"
+  },
   "engines": {
     "node": ">=18"
-  },
-  "dependencies": {
-    "express": "^4.19.2"
   }
 }
