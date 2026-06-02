@@ -1,11 +1,11 @@
-// server.js — Instagram Bot com comentários + Direct + IA + estado de conversa
+// server.js — Instagram Bot com IA roteadora + entregas por variável
 // Autor: @albertobri7o
 //
-// Nesta versão:
-// - Palavras-chave e entregas vêm de ENTREGAS_JSON no Railway.
-// - O Direct tem estado simples de conversa.
-// - Se a pessoa responde "treinamento" e depois "empresa", o bot NÃO repete a pergunta.
-// - Ele avança para: tipo do treinamento -> assunto -> dados para contato.
+// Arquitetura desta versão:
+// 1. Regra fixa SOMENTE para entrega direta via ENTREGAS_JSON.
+// 2. Todo o resto vai para IA: consultoria, imersão, treinamento, orçamento, dúvida, crítica, humano etc.
+// 3. A IA recebe o estado atual da conversa para não repetir pergunta.
+// 4. O código apenas executa a decisão da IA: responder, salvar estado, limpar estado e/ou notificar Alberto.
 
 import express from 'express';
 import crypto from 'crypto';
@@ -41,177 +41,21 @@ const RESPONDER_DIRECT = boolEnv('RESPONDER_DIRECT', true);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
-const openai = OPENAI_API_KEY
-  ? new OpenAI({ apiKey: OPENAI_API_KEY })
-  : null;
+const BOT_NEGOCIO_CONTEXT =
+  process.env.BOT_NEGOCIO_CONTEXT ||
+  `Alberto Brito, @albertobri7o, produz conteúdos, materiais, treinamentos, consultorias e imersões sobre Excel, Word, IA, automação, produtividade, Pacote Office, Power BI, dados e tecnologia aplicada ao trabalho.
 
-// ================= VARIÁVEIS DE NEGÓCIO =================
+Quando alguém perguntar sobre consultoria, imersão, treinamento, aula, empresa, equipe, orçamento, capacitação ou projeto, trate como lead comercial e qualifique antes de encaminhar para Alberto.
+
+Não trate consultoria como simples pedido humano. Consultoria, imersão e treinamento precisam de qualificação: público, tema, objetivo e contato.`;
+
+const BOT_FUNIL_JSON = process.env.BOT_FUNIL_JSON || '';
+
+const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+
+// ================= ENTREGAS FIXAS VIA VARIÁVEL =================
 
 const ENTREGAS = carregarEntregas();
-
-const PALAVRAS_HUMANO = csvEnv('PALAVRAS_HUMANO', [
-  'FALAR COM VOCÊ',
-  'FALAR COM VOCE',
-  'QUERO FALAR',
-  'ME CHAMA',
-  'ME CHAME',
-  'ATENDIMENTO',
-  'SUPORTE',
-  'CONSULTORIA',
-  'ORÇAMENTO',
-  'ORCAMENTO',
-  'ALBERTO',
-  'HUMANO',
-  'DÚVIDA',
-  'DUVIDA'
-]);
-
-const PALAVRAS_TREINAMENTO = csvEnv('PALAVRAS_TREINAMENTO', [
-  'TREINAMENTO',
-  'TREINAMENTOS',
-  'CURSO',
-  'AULA',
-  'AULAS',
-  'MENTORIA',
-  'CAPACITAÇÃO',
-  'CAPACITACAO',
-  'EQUIPE',
-  'EMPRESA',
-  'TURMA',
-  'WORKSHOP',
-  'APRENDER MAIS',
-  'SABER MAIS'
-]);
-
-const PALAVRAS_PRECO = csvEnv('PALAVRAS_PRECO', [
-  'PREÇO',
-  'PRECO',
-  'VALOR',
-  'CUSTA',
-  'QUANTO',
-  'COMPRAR',
-  'PAGAMENTO',
-  'LINK',
-  'CHECKOUT'
-]);
-
-const PALAVRAS_CRITICA = csvEnv('PALAVRAS_CRITICA', [
-  'ERRADO',
-  'NÃO FUNCIONA',
-  'NAO FUNCIONA',
-  'MENTIRA',
-  'FAKE',
-  'GOLPE',
-  'RUIM',
-  'FRACO',
-  'NÃO CONCORDO',
-  'NAO CONCORDO',
-  'COMPLICADO',
-  'CONFUSO',
-  'NÃO ENTENDI',
-  'NAO ENTENDI',
-  'EXPLICA MELHOR'
-]);
-
-const PALAVRAS_OFENSA = csvEnv('PALAVRAS_OFENSA', [
-  'IDIOTA',
-  'BURRO',
-  'PALHAÇO',
-  'PALHACO',
-  'LIXO',
-  'MERDA',
-  'VAI TOMAR',
-  'OTÁRIO',
-  'OTARIO'
-]);
-
-const PALAVRAS_TIPO_TREINAMENTO_EMPRESA = csvEnv('PALAVRAS_TIPO_TREINAMENTO_EMPRESA', [
-  'EMPRESA',
-  'MINHA EMPRESA',
-  'MEU NEGOCIO',
-  'MEU NEGÓCIO',
-  'NEGOCIO',
-  'NEGÓCIO',
-  'CORPORATIVO',
-  'ORGANIZACAO',
-  'ORGANIZAÇÃO'
-]);
-
-const PALAVRAS_TIPO_TREINAMENTO_EQUIPE = csvEnv('PALAVRAS_TIPO_TREINAMENTO_EQUIPE', [
-  'EQUIPE',
-  'TIME',
-  'FUNCIONARIOS',
-  'FUNCIONÁRIOS',
-  'COLABORADORES',
-  'SETOR',
-  'DEPARTAMENTO',
-  'TURMA'
-]);
-
-const PALAVRAS_TIPO_TREINAMENTO_INDIVIDUAL = csvEnv('PALAVRAS_TIPO_TREINAMENTO_INDIVIDUAL', [
-  'EU',
-  'PRA MIM',
-  'PARA MIM',
-  'COMIGO',
-  'INDIVIDUAL',
-  'PESSOAL',
-  'SO EU',
-  'SÓ EU'
-]);
-
-const MENSAGEM_HUMANO_DM =
-  process.env.MENSAGEM_HUMANO_DM ||
-  `Claro! 👋
-
-Sou o assistente do Alberto.
-
-Vou avisar ele agora que você quer falar diretamente.
-Enquanto isso, me diga aqui em uma mensagem rápida qual é sua dúvida.
-
-— @albertobri7o`;
-
-const MENSAGEM_HUMANO_COMENTARIO =
-  process.env.MENSAGEM_HUMANO_COMENTARIO ||
-  'te chamei no direct para entender melhor 📩';
-
-const MENSAGEM_CRITICA_COMENTARIO =
-  process.env.MENSAGEM_CRITICA_COMENTARIO ||
-  'obrigado pelo toque. Vou olhar isso com atenção.';
-
-const MENSAGEM_CRITICA_DM =
-  process.env.MENSAGEM_CRITICA_DM ||
-  `Oi! 👋
-
-Vi seu comentário e obrigado por falar.
-
-Quero entender melhor seu ponto para melhorar o conteúdo.
-Pode me explicar rapidamente o que você achou confuso ou errado?
-
-— @albertobri7o`;
-
-const MENSAGEM_COMENTARIO_ERRO =
-  process.env.MENSAGEM_COMENTARIO_ERRO ||
-  'me chama no direct que eu te envio 📩';
-
-const MENSAGEM_TREINAMENTO =
-  process.env.MENSAGEM_TREINAMENTO ||
-  `Legal! 👋
-
-O Alberto trabalha com conteúdos e treinamentos práticos para produtividade, tecnologia e trabalho.
-
-Para eu te direcionar melhor, me diga uma coisa:
-
-Você quer treinamento para você, para sua equipe ou para sua empresa?
-
-— @albertobri7o`;
-
-const MENSAGEM_ESCOLHER_MATERIAL =
-  process.env.MENSAGEM_ESCOLHER_MATERIAL ||
-  montarMensagemEscolherMaterial();
-
-const MENSAGEM_FALLBACK_DIRECT =
-  process.env.MENSAGEM_FALLBACK_DIRECT ||
-  montarMensagemFallbackDirect();
 
 // ================= CACHE / ESTADO =================
 
@@ -219,13 +63,8 @@ const comentariosProcessados = new Map();
 const mensagensProcessadas = new Map();
 const estadosDirect = new Map();
 
-const TEMPO_CACHE_MS = Number(
-  process.env.TEMPO_CACHE_MS || 1000 * 60 * 60 * 24
-);
-
-const TEMPO_ESTADO_DIRECT_MS = Number(
-  process.env.TEMPO_ESTADO_DIRECT_MS || 1000 * 60 * 60 * 6
-);
+const TEMPO_CACHE_MS = Number(process.env.TEMPO_CACHE_MS || 1000 * 60 * 60 * 24);
+const TEMPO_ESTADO_DIRECT_MS = Number(process.env.TEMPO_ESTADO_DIRECT_MS || 1000 * 60 * 60 * 6);
 
 // ================= HEALTHCHECK =================
 
@@ -297,10 +136,7 @@ async function processarComentario(comentario) {
     return;
   }
 
-  if (
-    (IG_USERNAME && usernameNormalizado === IG_USERNAME) ||
-    String(fromId) === String(IG_USER_ID)
-  ) {
+  if ((IG_USERNAME && usernameNormalizado === IG_USERNAME) || String(fromId) === String(IG_USER_ID)) {
     console.log(`Comentário ignorado: feito pelo próprio perfil @${username}`);
     return;
   }
@@ -319,6 +155,7 @@ async function processarComentario(comentario) {
   console.log(`💬 Comentário recebido de @${username}: "${text}"`);
   console.log(`🧩 commentId recebido: ${commentId}`);
 
+  // REGRA FIXA ÚNICA: entrega direta configurada em ENTREGAS_JSON.
   const entregasEncontradas = encontrarEntregas(textoNormalizado);
 
   if (entregasEncontradas.length > 0) {
@@ -326,62 +163,24 @@ async function processarComentario(comentario) {
     return;
   }
 
-  if (bateLista(textoNormalizado, PALAVRAS_HUMANO)) {
-    await fluxoHumanoComentario(commentId, username, text);
-    return;
-  }
+  // Todo o resto vai para IA.
+  const estado = fromId ? getEstadoDirect(fromId) : null;
 
-  if (bateLista(textoNormalizado, PALAVRAS_OFENSA)) {
-    await fluxoOfensa(username, text);
-    return;
-  }
+  const decisao = await decidirComIA({
+    origem: 'comentario',
+    texto: text,
+    username,
+    senderId: fromId,
+    estado
+  });
 
-  if (bateLista(textoNormalizado, PALAVRAS_CRITICA)) {
-    await fluxoCriticaComentario(commentId, username, text);
-    return;
-  }
-
-  const classificacao = await classificarComIA(text, 'comentario');
-
-  console.log('🤖 Classificação IA comentário:', classificacao);
-
-  if (classificacao.tipo === 'DELICADO') {
-    await notificarAlberto(username, text, 'COMENTÁRIO DELICADO / REVISAR');
-    return;
-  }
-
-  if (classificacao.tipo === 'TREINAMENTO') {
-    await fluxoHumanoComentario(commentId, username, text);
-    await notificarAlberto(username, text, 'LEAD DE TREINAMENTO NO COMENTÁRIO');
-    return;
-  }
-
-  if (['ENTREGA', 'INTERESSE'].includes(classificacao.tipo)) {
-    await fluxoInteresseComentario(commentId, username, text, classificacao);
-    return;
-  }
-
-  if (classificacao.tipo === 'CRITICA') {
-    await fluxoCriticaComentario(commentId, username, text);
-    return;
-  }
-
-  if (classificacao.tipo === 'OFENSA') {
-    await fluxoOfensa(username, text);
-    return;
-  }
-
-  if (classificacao.tipo === 'HUMANO') {
-    await fluxoHumanoComentario(commentId, username, text);
-    return;
-  }
-
-  if (classificacao.tipo === 'DUVIDA') {
-    await fluxoDuvidaComentario(commentId, username, text, classificacao);
-    return;
-  }
-
-  console.log(`Comentário sem ação automática: "${text}"`);
+  await executarDecisaoComentario({
+    decisao,
+    commentId,
+    username,
+    textoOriginal: text,
+    senderId: fromId
+  });
 }
 
 // ================= DIRECT =================
@@ -428,33 +227,15 @@ async function processarMensagemDirect(event) {
 
   console.log(`📩 DM recebida de ${senderId}: "${text}"`);
 
-  // 0. Continua fluxo se já havia uma pergunta pendente.
-  const estado = getEstadoDirect(senderId);
-
-  if (estado?.etapa === 'AGUARDANDO_TIPO_TREINAMENTO') {
-    await tratarRespostaTipoTreinamento(senderId, usuarioDirect, text, textoNormalizado, estado);
-    return;
-  }
-
-  if (estado?.etapa === 'AGUARDANDO_ASSUNTO_TREINAMENTO') {
-    await tratarRespostaAssuntoTreinamento(senderId, usuarioDirect, text, textoNormalizado, estado);
-    return;
-  }
-
-  if (estado?.etapa === 'AGUARDANDO_CONTATO_TREINAMENTO') {
-    await tratarRespostaContatoTreinamento(senderId, usuarioDirect, text, estado);
-    return;
-  }
-
-  // 1. Se a pessoa responder palavra-chave no Direct, entrega também.
+  // REGRA FIXA ÚNICA: entrega direta configurada em ENTREGAS_JSON.
   const entregasEncontradas = encontrarEntregas(textoNormalizado);
 
   if (entregasEncontradas.length > 0) {
     const entregasValidas = entregasEncontradas.filter(e => e.link);
 
     if (entregasValidas.length === 0) {
-      await enviarMensagemDirect(senderId, MENSAGEM_ESCOLHER_MATERIAL);
-      await notificarAlberto(usuarioDirect, text, 'DM COM PALAVRA-CHAVE SEM LINK CONFIGURADO');
+      await enviarMensagemDirect(senderId, montarMensagemEscolherMaterial());
+      await notificarAlberto(usuarioDirect, text, 'DM COM ENTREGA SEM LINK CONFIGURADO');
       return;
     }
 
@@ -463,280 +244,345 @@ async function processarMensagemDirect(event) {
     return;
   }
 
-  // 2. Se a pessoa já responde "empresa/equipe/eu" sem contexto, trata como tipo de treinamento.
-  const tipoTreinamentoSolto = identificarTipoTreinamento(textoNormalizado);
+  // Todo o resto vai para IA, com estado da conversa.
+  const estado = getEstadoDirect(senderId);
 
-  if (tipoTreinamentoSolto) {
-    await avancarParaAssuntoTreinamento(senderId, usuarioDirect, text, tipoTreinamentoSolto);
-    return;
-  }
+  const decisao = await decidirComIA({
+    origem: 'direct',
+    texto: text,
+    username: usuarioDirect,
+    senderId,
+    estado
+  });
 
-  // 3. Treinamento, curso, equipe, empresa.
-  if (bateLista(textoNormalizado, PALAVRAS_TREINAMENTO)) {
-    setEstadoDirect(senderId, 'AGUARDANDO_TIPO_TREINAMENTO', {
-      origem: 'direct',
-      primeiroTexto: text
-    });
-
-    await enviarMensagemDirect(senderId, MENSAGEM_TREINAMENTO);
-    await notificarAlberto(usuarioDirect, text, 'LEAD DE TREINAMENTO NO DIRECT');
-    return;
-  }
-
-  // 4. Preço/comprar/link sem especificar material.
-  if (bateLista(textoNormalizado, PALAVRAS_PRECO)) {
-    await enviarMensagemDirect(senderId, MENSAGEM_ESCOLHER_MATERIAL);
-    await notificarAlberto(usuarioDirect, text, 'DM: INTERESSE EM PREÇO/COMPRA SEM MATERIAL DEFINIDO');
-    return;
-  }
-
-  // 5. Pedido humano direto.
-  if (bateLista(textoNormalizado, PALAVRAS_HUMANO)) {
-    await enviarMensagemDirect(senderId, MENSAGEM_HUMANO_DM);
-    await notificarAlberto(usuarioDirect, text, 'DM: PEDIDO PARA FALAR COM ALBERTO');
-    return;
-  }
-
-  // 6. Crítica/ofensa.
-  if (bateLista(textoNormalizado, PALAVRAS_OFENSA)) {
-    await notificarAlberto(usuarioDirect, text, 'DM: OFENSA / POSSÍVEL MODERAÇÃO');
-    return;
-  }
-
-  if (bateLista(textoNormalizado, PALAVRAS_CRITICA)) {
-    await enviarMensagemDirect(senderId, MENSAGEM_CRITICA_DM);
-    await notificarAlberto(usuarioDirect, text, 'DM: CRÍTICA / OBJEÇÃO');
-    return;
-  }
-
-  // 7. IA classifica o restante.
-  const classificacao = await classificarComIA(text, 'direct');
-
-  console.log('🤖 Classificação IA direct:', classificacao);
-
-  if (classificacao.tipo === 'TREINAMENTO') {
-    setEstadoDirect(senderId, 'AGUARDANDO_TIPO_TREINAMENTO', {
-      origem: 'direct_ia',
-      primeiroTexto: text
-    });
-
-    await enviarMensagemDirect(senderId, MENSAGEM_TREINAMENTO);
-    await notificarAlberto(usuarioDirect, text, `DM: LEAD TREINAMENTO IA — ${classificacao.motivo || ''}`);
-    return;
-  }
-
-  if (classificacao.tipo === 'HUMANO' || classificacao.tipo === 'DELICADO') {
-    await enviarMensagemDirect(senderId, MENSAGEM_HUMANO_DM);
-    await notificarAlberto(usuarioDirect, text, `DM: ${classificacao.tipo} — ${classificacao.motivo || ''}`);
-    return;
-  }
-
-  if (classificacao.tipo === 'ENTREGA' || classificacao.tipo === 'INTERESSE') {
-    await enviarMensagemDirect(senderId, MENSAGEM_ESCOLHER_MATERIAL);
-    await notificarAlberto(usuarioDirect, text, `DM: INTERESSE IA — ${classificacao.motivo || ''}`);
-    return;
-  }
-
-  if (classificacao.tipo === 'DUVIDA') {
-    await enviarMensagemDirect(senderId, montarMensagemDuvida());
-    await notificarAlberto(usuarioDirect, text, `DM: DÚVIDA IA — ${classificacao.motivo || ''}`);
-    return;
-  }
-
-  if (classificacao.tipo === 'CRITICA') {
-    await enviarMensagemDirect(senderId, MENSAGEM_CRITICA_DM);
-    await notificarAlberto(usuarioDirect, text, `DM: CRÍTICA IA — ${classificacao.motivo || ''}`);
-    return;
-  }
-
-  if (classificacao.tipo === 'OFENSA') {
-    await notificarAlberto(usuarioDirect, text, `DM: OFENSA IA — ${classificacao.motivo || ''}`);
-    return;
-  }
-
-  await enviarMensagemDirect(senderId, MENSAGEM_FALLBACK_DIRECT);
+  await executarDecisaoDirect({
+    decisao,
+    senderId,
+    username: usuarioDirect,
+    textoOriginal: text
+  });
 }
 
-// ================= ESTADO DE TREINAMENTO =================
+// ================= EXECUÇÃO DAS DECISÕES DA IA =================
 
-async function tratarRespostaTipoTreinamento(senderId, usuarioDirect, text, textoNormalizado, estado) {
-  const tipo = identificarTipoTreinamento(textoNormalizado);
+async function executarDecisaoComentario({ decisao, commentId, username, textoOriginal, senderId }) {
+  const resposta = limparResposta(decisao?.resposta);
 
-  if (!tipo) {
-    await enviarMensagemDirect(
-      senderId,
-      `Perfeito. 👋
+  if (senderId && decisao?.estado_novo) {
+    setEstadoDirect(senderId, decisao.estado_novo, {
+      origem: 'comentario',
+      intencao: decisao.intencao,
+      ultimoTexto: textoOriginal,
+      resumo: decisao.resumo_estado || decisao.motivo || ''
+    });
+  }
 
-Só para eu direcionar melhor:
+  if (senderId && decisao?.limpar_estado) {
+    clearEstadoDirect(senderId);
+  }
 
-Esse treinamento seria para você, para sua equipe ou para sua empresa?`
+  if (decisao?.notificar_alberto) {
+    await notificarAlberto(
+      username,
+      montarResumoNotificacao(textoOriginal, decisao),
+      `COMENTÁRIO — ${decisao.intencao || 'IA'}`
     );
+  }
+
+  if (['IGNORAR', 'SPAM'].includes(decisao?.intencao)) {
+    console.log(`Comentário ignorado por decisão da IA: ${decisao.intencao}`);
     return;
   }
 
-  await avancarParaAssuntoTreinamento(senderId, usuarioDirect, text, tipo, estado);
-}
-
-async function avancarParaAssuntoTreinamento(senderId, usuarioDirect, text, tipo, estadoAnterior = {}) {
-  setEstadoDirect(senderId, 'AGUARDANDO_ASSUNTO_TREINAMENTO', {
-    ...estadoAnterior?.dados,
-    tipoTreinamento: tipo,
-    respostaTipo: text
-  });
-
-  await enviarMensagemDirect(
-    senderId,
-    `Perfeito. Treinamento para ${tipo}. 👋
-
-Qual seria o foco principal?
-
-1. Excel e planilhas
-2. Word e documentos
-3. IA no trabalho
-4. Automação e WhatsApp
-5. Pacote Office completo
-6. Outro assunto
-
-Responda com o número ou com o tema.`
-  );
-
-  await notificarAlberto(
-    usuarioDirect,
-    `Tipo de treinamento informado: ${tipo}\nResposta: ${text}`,
-    `LEAD TREINAMENTO — TIPO: ${tipo.toUpperCase()}`
-  );
-}
-
-async function tratarRespostaAssuntoTreinamento(senderId, usuarioDirect, text, textoNormalizado, estado) {
-  const assunto = identificarAssuntoTreinamento(textoNormalizado, text);
-
-  setEstadoDirect(senderId, 'AGUARDANDO_CONTATO_TREINAMENTO', {
-    ...estado?.dados,
-    assuntoTreinamento: assunto,
-    respostaAssunto: text
-  });
-
-  const tipo = estado?.dados?.tipoTreinamento || 'treinamento';
-
-  await enviarMensagemDirect(
-    senderId,
-    `Ótimo. Anotei:
-
-Tipo: ${tipo}
-Foco: ${assunto}
-
-Para o Alberto te orientar melhor, me envie agora:
-
-1. Nome da empresa ou área
-2. Quantidade aproximada de pessoas
-3. Melhor WhatsApp ou horário para contato`
-  );
-
-  await notificarAlberto(
-    usuarioDirect,
-    `Tipo: ${tipo}\nAssunto: ${assunto}\nResposta do usuário: ${text}`,
-    'LEAD TREINAMENTO — ASSUNTO INFORMADO'
-  );
-}
-
-async function tratarRespostaContatoTreinamento(senderId, usuarioDirect, text, estado) {
-  const dados = estado?.dados || {};
-
-  clearEstadoDirect(senderId);
-
-  await enviarMensagemDirect(
-    senderId,
-    `Recebi. ✅
-
-Vou repassar essas informações para o Alberto.
-
-Ele vai analisar o melhor formato de treinamento e te responder por aqui ou pelo contato informado.
-
-— @albertobri7o`
-  );
-
-  await notificarAlberto(
-    usuarioDirect,
-    `Novo lead de treinamento completo.
-
-Tipo: ${dados.tipoTreinamento || 'não informado'}
-Assunto: ${dados.assuntoTreinamento || 'não informado'}
-
-Dados enviados:
-${text}`,
-    'LEAD TREINAMENTO — DADOS PARA CONTATO'
-  );
-}
-
-function identificarTipoTreinamento(textoNormalizado) {
-  if (bateLista(textoNormalizado, PALAVRAS_TIPO_TREINAMENTO_EMPRESA)) {
-    return 'empresa';
+  if (!resposta) {
+    console.log('IA não gerou resposta para comentário.');
+    return;
   }
 
-  if (bateLista(textoNormalizado, PALAVRAS_TIPO_TREINAMENTO_EQUIPE)) {
-    return 'equipe';
+  let privateReplyEnviado = false;
+
+  if (ENVIAR_PRIVATE_REPLY) {
+    try {
+      await enviarPrivateReply(commentId, resposta);
+      privateReplyEnviado = true;
+      console.log('✅ Private reply enviada por IA');
+    } catch (error) {
+      console.error('❌ Erro ao enviar private reply por IA:', error.message);
+      await notificarAlberto(username, textoOriginal, `ERRO AO ENVIAR PRIVATE REPLY IA: ${error.message}`);
+    }
   }
 
-  if (bateLista(textoNormalizado, PALAVRAS_TIPO_TREINAMENTO_INDIVIDUAL)) {
-    return 'você';
-  }
+  if (RESPONDER_PUBLICO) {
+    const msgPublica = privateReplyEnviado
+      ? `@${username} te respondi no direct 📩`
+      : `@${username} me chama no direct que eu te respondo 📩`;
 
-  return null;
+    await responderComentarioSeguro(commentId, msgPublica);
+  }
 }
 
-function identificarAssuntoTreinamento(textoNormalizado, textoOriginal) {
-  if (contemPalavraOuFrase(textoNormalizado, '1') || contemPalavraOuFrase(textoNormalizado, 'EXCEL') || contemPalavraOuFrase(textoNormalizado, 'PLANILHA')) {
-    return 'Excel e planilhas';
+async function executarDecisaoDirect({ decisao, senderId, username, textoOriginal }) {
+  const resposta = limparResposta(decisao?.resposta);
+
+  if (decisao?.estado_novo) {
+    setEstadoDirect(senderId, decisao.estado_novo, {
+      origem: 'direct',
+      intencao: decisao.intencao,
+      ultimoTexto: textoOriginal,
+      resumo: decisao.resumo_estado || decisao.motivo || ''
+    });
   }
 
-  if (contemPalavraOuFrase(textoNormalizado, '2') || contemPalavraOuFrase(textoNormalizado, 'WORD') || contemPalavraOuFrase(textoNormalizado, 'DOCUMENTO')) {
-    return 'Word e documentos';
+  if (decisao?.limpar_estado) {
+    clearEstadoDirect(senderId);
   }
 
-  if (contemPalavraOuFrase(textoNormalizado, '3') || contemPalavraOuFrase(textoNormalizado, 'IA') || contemPalavraOuFrase(textoNormalizado, 'INTELIGENCIA ARTIFICIAL') || contemPalavraOuFrase(textoNormalizado, 'INTELIGÊNCIA ARTIFICIAL')) {
-    return 'IA no trabalho';
+  if (decisao?.notificar_alberto) {
+    await notificarAlberto(
+      username,
+      montarResumoNotificacao(textoOriginal, decisao),
+      `DIRECT — ${decisao.intencao || 'IA'}`
+    );
   }
 
-  if (contemPalavraOuFrase(textoNormalizado, '4') || contemPalavraOuFrase(textoNormalizado, 'AUTOMACAO') || contemPalavraOuFrase(textoNormalizado, 'AUTOMAÇÃO') || contemPalavraOuFrase(textoNormalizado, 'WHATSAPP')) {
-    return 'Automação e WhatsApp';
+  if (['IGNORAR', 'SPAM'].includes(decisao?.intencao) && !resposta) {
+    console.log(`Direct ignorado por decisão da IA: ${decisao.intencao}`);
+    return;
   }
 
-  if (contemPalavraOuFrase(textoNormalizado, '5') || contemPalavraOuFrase(textoNormalizado, 'OFFICE') || contemPalavraOuFrase(textoNormalizado, 'PACOTE OFFICE')) {
-    return 'Pacote Office completo';
+  if (!resposta) {
+    await enviarMensagemDirect(senderId, montarMensagemFallbackDirect());
+    return;
   }
 
-  return textoOriginal;
+  await enviarMensagemDirect(senderId, resposta);
 }
 
-function setEstadoDirect(senderId, etapa, dados = {}) {
-  estadosDirect.set(String(senderId), {
-    etapa,
-    dados,
-    atualizadoEm: Date.now()
-  });
+// ================= IA ROTEADORA =================
 
-  console.log(`🧭 Estado do Direct atualizado para ${senderId}: ${etapa}`);
-}
-
-function getEstadoDirect(senderId) {
-  const estado = estadosDirect.get(String(senderId));
-
-  if (!estado) return null;
-
-  if (Date.now() - estado.atualizadoEm > TEMPO_ESTADO_DIRECT_MS) {
-    estadosDirect.delete(String(senderId));
-    return null;
+async function decidirComIA({ origem, texto, username, senderId, estado }) {
+  if (!openai) {
+    return decisaoFallbackSemIA(texto, estado);
   }
 
-  return estado;
+  try {
+    const materiaisDisponiveis = ENTREGAS.map(e => ({
+      nome: e.nome,
+      palavras: e.palavras,
+      tipo: e.tipo
+    }));
+
+    const prompt = `
+Você é o cérebro de atendimento do Instagram @albertobri7o.
+
+CONTEXTO DO NEGÓCIO:
+${BOT_NEGOCIO_CONTEXT}
+
+FUNIL/REGRAS EXTRAS DO USUÁRIO:
+${BOT_FUNIL_JSON || 'Nenhuma regra extra configurada.'}
+
+ENTREGAS CONFIGURADAS:
+${JSON.stringify(materiaisDisponiveis, null, 2)}
+
+ORIGEM DA MENSAGEM:
+${origem}
+
+USUÁRIO:
+${username || 'desconhecido'}
+
+ESTADO ATUAL DA CONVERSA:
+${estado ? JSON.stringify(estado, null, 2) : 'SEM_ESTADO'}
+
+MENSAGEM DO USUÁRIO:
+"${texto}"
+
+SUA TAREFA:
+Decidir a próxima ação do bot.
+
+REGRAS IMPORTANTES:
+1. Não trate "consultoria" como simples humano. Consultoria é lead comercial.
+2. "imersão", "imersao", "masterclass", "aula", "curso", "treinamento" e "capacitação" são lead de treinamento/imersão.
+3. Se o estado atual já estiver aguardando uma resposta, avance a conversa. NÃO repita a pergunta anterior.
+4. Se o estado pergunta "você/equipe/empresa" e o usuário responde "empresa", avance para perguntar o tema/objetivo.
+5. Se o usuário pergunta "ele dá consultoria?", responda que sim e pergunte se é para pessoa, equipe ou empresa.
+6. Se o usuário demonstra compra/preço/orçamento, qualifique antes: para quem, tema e melhor contato.
+7. Para crítica, ofensa ou tema delicado, notifique Alberto e responda com cuidado ou silencie.
+8. Seja curto, natural, brasileiro e profissional.
+9. Não invente preço.
+10. Não diga que é IA. Pode dizer "sou o assistente do Alberto".
+
+ESTADOS POSSÍVEIS:
+- AGUARDANDO_ESCOPO_CONSULTORIA
+- AGUARDANDO_TEMA_CONSULTORIA
+- AGUARDANDO_CONTATO_CONSULTORIA
+- AGUARDANDO_TIPO_TREINAMENTO
+- AGUARDANDO_ASSUNTO_TREINAMENTO
+- AGUARDANDO_CONTATO_TREINAMENTO
+- AGUARDANDO_MATERIAL
+- null
+
+INTENÇÕES POSSÍVEIS:
+- MATERIAL
+- CONSULTORIA
+- TREINAMENTO
+- IMERSAO
+- ORCAMENTO
+- HUMANO
+- CRITICA
+- OFENSA
+- DUVIDA
+- ELOGIO
+- SPAM
+- DELICADO
+- INTERESSE
+- IGNORAR
+
+Responda APENAS em JSON válido, sem markdown, neste formato:
+{
+  "intencao": "CONSULTORIA",
+  "acao": "RESPONDER",
+  "resposta": "texto que será enviado ao usuário",
+  "estado_novo": "AGUARDANDO_ESCOPO_CONSULTORIA",
+  "limpar_estado": false,
+  "notificar_alberto": true,
+  "motivo": "explicação curta",
+  "resumo_estado": "resumo curto para guardar no estado",
+  "resumo_para_alberto": "resumo do lead ou alerta para Alberto",
+  "confianca": 0.9
 }
 
-function clearEstadoDirect(senderId) {
-  estadosDirect.delete(String(senderId));
-  console.log(`🧭 Estado do Direct limpo para ${senderId}`);
+EXEMPLOS:
+Mensagem: "Quero saber se ele dá consultoria"
+Resposta:
+{
+  "intencao": "CONSULTORIA",
+  "acao": "RESPONDER",
+  "resposta": "Sim, o Alberto faz consultorias. 👋\\n\\nPara eu te direcionar melhor, essa consultoria seria para você, para sua equipe ou para sua empresa?",
+  "estado_novo": "AGUARDANDO_ESCOPO_CONSULTORIA",
+  "limpar_estado": false,
+  "notificar_alberto": true,
+  "motivo": "Lead perguntando sobre consultoria",
+  "resumo_estado": "Usuário quer saber sobre consultoria",
+  "resumo_para_alberto": "Lead perguntou se Alberto faz consultoria",
+  "confianca": 0.95
 }
 
-// ================= FLUXOS DE COMENTÁRIO =================
+Estado atual: AGUARDANDO_ESCOPO_CONSULTORIA
+Mensagem: "empresa"
+Resposta:
+{
+  "intencao": "CONSULTORIA",
+  "acao": "RESPONDER",
+  "resposta": "Perfeito, consultoria para empresa. 👋\\n\\nQual é o principal objetivo agora?\\n\\n1. melhorar planilhas/processos\\n2. treinar equipe\\n3. usar IA no trabalho\\n4. automatizar atendimento/WhatsApp\\n5. organizar dados e dashboards\\n6. outro ponto",
+  "estado_novo": "AGUARDANDO_TEMA_CONSULTORIA",
+  "limpar_estado": false,
+  "notificar_alberto": true,
+  "motivo": "Usuário informou escopo empresa",
+  "resumo_estado": "Consultoria para empresa",
+  "resumo_para_alberto": "Lead de consultoria para empresa",
+  "confianca": 0.95
+}
+
+Mensagem: "IMERSÃO"
+Resposta:
+{
+  "intencao": "IMERSAO",
+  "acao": "RESPONDER",
+  "resposta": "Legal! 👋\\n\\nVocê quer uma imersão voltada para qual público?\\n\\n1. você\\n2. sua equipe\\n3. sua empresa",
+  "estado_novo": "AGUARDANDO_TIPO_TREINAMENTO",
+  "limpar_estado": false,
+  "notificar_alberto": true,
+  "motivo": "Interesse em imersão",
+  "resumo_estado": "Usuário demonstrou interesse em imersão",
+  "resumo_para_alberto": "Lead interessado em imersão",
+  "confianca": 0.95
+}
+`;
+
+    const response = await openai.responses.create({
+      model: OPENAI_MODEL,
+      input: prompt,
+      temperature: 0
+    });
+
+    const output = response.output_text || '';
+    const json = extrairJson(output);
+
+    if (!json?.intencao) {
+      console.warn('IA não retornou JSON válido. Saída:', output);
+      return decisaoFallbackSemIA(texto, estado);
+    }
+
+    return normalizarDecisao(json);
+  } catch (error) {
+    console.error('Erro na decisão IA:', error.message);
+    return decisaoFallbackSemIA(texto, estado);
+  }
+}
+
+function normalizarDecisao(json) {
+  const estadoNovo = json.estado_novo === 'null' ? null : json.estado_novo;
+
+  return {
+    intencao: String(json.intencao || 'IGNORAR').toUpperCase(),
+    acao: String(json.acao || 'RESPONDER').toUpperCase(),
+    resposta: String(json.resposta || '').trim(),
+    estado_novo: estadoNovo || null,
+    limpar_estado: Boolean(json.limpar_estado),
+    notificar_alberto: Boolean(json.notificar_alberto),
+    motivo: String(json.motivo || '').trim(),
+    resumo_estado: String(json.resumo_estado || '').trim(),
+    resumo_para_alberto: String(json.resumo_para_alberto || '').trim(),
+    confianca: Number(json.confianca || 0)
+  };
+}
+
+function decisaoFallbackSemIA(texto, estado) {
+  if (estado?.etapa) {
+    return {
+      intencao: 'HUMANO',
+      acao: 'RESPONDER',
+      resposta: `Recebi. 👋\n\nVou encaminhar isso para o Alberto analisar melhor e te responder com mais precisão.`,
+      estado_novo: null,
+      limpar_estado: true,
+      notificar_alberto: true,
+      motivo: 'Fallback sem IA com estado ativo',
+      resumo_estado: '',
+      resumo_para_alberto: `Mensagem recebida com estado ativo: ${texto}`,
+      confianca: 0
+    };
+  }
+
+  return {
+    intencao: 'INTERESSE',
+    acao: 'RESPONDER',
+    resposta: montarMensagemFallbackDirect(),
+    estado_novo: null,
+    limpar_estado: false,
+    notificar_alberto: false,
+    motivo: 'Fallback sem IA',
+    resumo_estado: '',
+    resumo_para_alberto: '',
+    confianca: 0
+  };
+}
+
+function extrairJson(texto) {
+  try {
+    return JSON.parse(texto);
+  } catch {
+    const match = texto.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
+// ================= FLUXO DE ENTREGA FIXA =================
 
 async function fluxoEntregaComentario(commentId, username, comentarioOriginal, entregas) {
   const entregasValidas = entregas.filter(e => e.link);
@@ -751,10 +597,7 @@ async function fluxoEntregaComentario(commentId, username, comentarioOriginal, e
     );
 
     if (RESPONDER_PUBLICO) {
-      await responderComentarioSeguro(
-        commentId,
-        `@${username} ${MENSAGEM_COMENTARIO_ERRO}`
-      );
+      await responderComentarioSeguro(commentId, `@${username} me chama no direct que eu te envio 📩`);
     }
 
     return;
@@ -762,11 +605,9 @@ async function fluxoEntregaComentario(commentId, username, comentarioOriginal, e
 
   let dmEnviada = false;
 
-  const mensagemDm = montarMensagemEntrega(entregasValidas);
-
   if (ENVIAR_PRIVATE_REPLY) {
     try {
-      await enviarPrivateReply(commentId, mensagemDm);
+      await enviarPrivateReply(commentId, montarMensagemEntrega(entregasValidas));
       dmEnviada = true;
       console.log(`✅ Entrega enviada para @${username}: ${entregasValidas.map(e => e.nome).join(', ')}`);
     } catch (error) {
@@ -778,110 +619,9 @@ async function fluxoEntregaComentario(commentId, username, comentarioOriginal, e
   if (RESPONDER_PUBLICO) {
     const mensagemPublica = dmEnviada
       ? `@${username} ${mensagemComentarioEntrega(entregasValidas)}`
-      : `@${username} ${MENSAGEM_COMENTARIO_ERRO}`;
+      : `@${username} me chama no direct que eu te envio 📩`;
 
     await responderComentarioSeguro(commentId, mensagemPublica);
-  }
-}
-
-async function fluxoHumanoComentario(commentId, username, comentarioOriginal) {
-  console.log(`🙋 Pedido humano detectado: @${username}`);
-
-  let dmEnviada = false;
-
-  if (ENVIAR_PRIVATE_REPLY) {
-    try {
-      await enviarPrivateReply(commentId, MENSAGEM_HUMANO_DM);
-      dmEnviada = true;
-    } catch (error) {
-      console.error('Erro ao enviar DM humana:', error.message);
-    }
-  }
-
-  await notificarAlberto(username, comentarioOriginal, 'PEDIDO PARA FALAR COM ALBERTO');
-
-  if (RESPONDER_PUBLICO) {
-    const mensagemPublica = dmEnviada
-      ? `@${username} ${MENSAGEM_HUMANO_COMENTARIO}`
-      : `@${username} me chama no direct que eu te respondo 📩`;
-
-    await responderComentarioSeguro(commentId, mensagemPublica);
-  }
-}
-
-async function fluxoCriticaComentario(commentId, username, comentarioOriginal) {
-  console.log(`⚠️ Crítica/objeção detectada: @${username}`);
-
-  await notificarAlberto(username, comentarioOriginal, 'CRÍTICA / OBJEÇÃO');
-
-  if (ENVIAR_PRIVATE_REPLY) {
-    try {
-      await enviarPrivateReply(commentId, MENSAGEM_CRITICA_DM);
-    } catch (error) {
-      console.error('Erro ao enviar DM crítica:', error.message);
-    }
-  }
-
-  if (RESPONDER_PUBLICO) {
-    await responderComentarioSeguro(
-      commentId,
-      `@${username} ${MENSAGEM_CRITICA_COMENTARIO}`
-    );
-  }
-}
-
-async function fluxoOfensa(username, comentarioOriginal) {
-  console.log(`🚫 Ofensa detectada: @${username}`);
-  await notificarAlberto(username, comentarioOriginal, 'OFENSA / POSSÍVEL MODERAÇÃO');
-}
-
-async function fluxoDuvidaComentario(commentId, username, comentarioOriginal, classificacao) {
-  console.log(`❓ Dúvida detectada: @${username}`);
-
-  const mensagem = `Oi! 👋
-
-Vi sua dúvida no comentário.
-
-Me responde aqui com mais detalhes que eu tento te ajudar ou encaminho para o Alberto.
-
-— @albertobri7o`;
-
-  if (ENVIAR_PRIVATE_REPLY) {
-    try {
-      await enviarPrivateReply(commentId, mensagem);
-    } catch (error) {
-      console.error('Erro ao enviar DM dúvida:', error.message);
-    }
-  }
-
-  await notificarAlberto(
-    username,
-    comentarioOriginal,
-    `DÚVIDA DETECTADA: ${classificacao?.motivo || 'sem motivo informado'}`
-  );
-
-  if (RESPONDER_PUBLICO) {
-    await responderComentarioSeguro(
-      commentId,
-      `@${username} te chamei no direct para entender melhor 📩`
-    );
-  }
-}
-
-async function fluxoInteresseComentario(commentId, username, comentarioOriginal, classificacao) {
-  console.log(`👀 Interesse detectado: @${username}`);
-
-  await notificarAlberto(
-    username,
-    comentarioOriginal,
-    `INTERESSE SEM PALAVRA-CHAVE: ${classificacao?.motivo || 'sem motivo informado'}`
-  );
-
-  if (RESPONDER_PUBLICO) {
-    await responderComentarioSeguro(
-      commentId,
-      `@${username} me diga qual material você quer no direct.`
-    );
   }
 }
 
@@ -990,105 +730,9 @@ async function enviarMensagemDirect(recipientId, mensagem) {
   return response.json();
 }
 
-// ================= IA =================
-
-async function classificarComIA(texto, origem = 'comentario') {
-  if (!openai) {
-    return {
-      tipo: 'IGNORAR',
-      motivo: 'OPENAI_API_KEY não configurada',
-      confianca: 0
-    };
-  }
-
-  try {
-    const materiaisDisponiveis = ENTREGAS.map(e => e.nome).join(', ') || 'nenhum material configurado';
-
-    const prompt = `
-Você é a camada de interpretação de um bot do Instagram do perfil @albertobri7o.
-
-Materiais/entregas disponíveis configurados no sistema:
-${materiaisDisponiveis}
-
-O perfil trabalha com tecnologia aplicada ao trabalho, produtividade, planilhas, documentos, inteligência artificial, automação e treinamentos.
-
-Origem da mensagem: ${origem}
-
-Mensagem do usuário:
-"${texto}"
-
-Classifique APENAS em JSON válido, neste formato:
-{
-  "tipo": "ENTREGA|HUMANO|CRITICA|OFENSA|DUVIDA|INTERESSE|TREINAMENTO|ELOGIO|SPAM|DELICADO|IGNORAR",
-  "motivo": "explicação curta",
-  "confianca": 0.0
-}
-
-Regras:
-- TREINAMENTO: quer saber sobre treinamentos, cursos, aulas, mentoria, capacitação, equipe, empresa ou aprender com Alberto.
-- ENTREGA: quer claramente algum material/link, mas não usou palavra-chave exata.
-- HUMANO: quer falar com Alberto, suporte, orçamento, consultoria ou atendimento.
-- CRITICA: crítica, objeção ou discordância educada.
-- OFENSA: ataque pessoal, xingamento ou agressividade.
-- DUVIDA: pergunta real sobre o conteúdo.
-- INTERESSE: demonstra interesse, mas sem dizer exatamente o que quer.
-- ELOGIO: elogio simples.
-- SPAM: propaganda ou comentário sem relação.
-- DELICADO: acusação, risco de imagem, tema sensível ou algo que precisa de Alberto.
-- IGNORAR: comentário neutro sem necessidade de ação.
-`;
-
-    const response = await openai.responses.create({
-      model: OPENAI_MODEL,
-      input: prompt,
-      temperature: 0
-    });
-
-    const output = response.output_text || '';
-    const json = extrairJson(output);
-
-    if (!json?.tipo) {
-      return {
-        tipo: 'IGNORAR',
-        motivo: 'IA não retornou JSON válido',
-        confianca: 0
-      };
-    }
-
-    return {
-      tipo: String(json.tipo || 'IGNORAR').toUpperCase(),
-      motivo: String(json.motivo || ''),
-      confianca: Number(json.confianca || 0)
-    };
-  } catch (error) {
-    console.error('Erro na classificação IA:', error.message);
-
-    return {
-      tipo: 'IGNORAR',
-      motivo: `Erro IA: ${error.message}`,
-      confianca: 0
-    };
-  }
-}
-
-function extrairJson(texto) {
-  try {
-    return JSON.parse(texto);
-  } catch {
-    const match = texto.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-
-    try {
-      return JSON.parse(match[0]);
-    } catch {
-      return null;
-    }
-  }
-}
-
 // ================= TELEGRAM =================
 
-async function notificarAlberto(username, comentario, tipo) {
+async function notificarAlberto(username, conteudo, tipo) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
 
@@ -1105,8 +749,7 @@ async function notificarAlberto(username, comentario, tipo) {
 
 Usuário: @${username}
 
-Mensagem:
-${comentario}
+${conteudo}
 
 Perfil:
 ${perfil}`;
@@ -1116,9 +759,7 @@ ${perfil}`;
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: chatId,
         text: mensagem
@@ -1135,7 +776,24 @@ ${perfil}`;
   }
 }
 
-// ================= BUSCAS E MENSAGENS =================
+function montarResumoNotificacao(textoOriginal, decisao) {
+  return `Mensagem:
+${textoOriginal}
+
+Intenção:
+${decisao?.intencao || 'não informada'}
+
+Motivo:
+${decisao?.motivo || 'não informado'}
+
+Resumo:
+${decisao?.resumo_para_alberto || 'sem resumo'}
+
+Estado novo:
+${decisao?.estado_novo || 'nenhum'}`;
+}
+
+// ================= ENTREGAS E MENSAGENS =================
 
 function encontrarEntregas(textoNormalizado) {
   const encontradas = [];
@@ -1153,12 +811,6 @@ function encontrarEntregas(textoNormalizado) {
   }
 
   return encontradas;
-}
-
-function bateLista(textoNormalizado, lista) {
-  return lista.some(palavra =>
-    contemPalavraOuFrase(textoNormalizado, normalizar(palavra))
-  );
 }
 
 function contemPalavraOuFrase(texto, termo) {
@@ -1232,33 +884,47 @@ ${opcoes || 'Nenhum material configurado ainda.'}
 }
 
 function montarMensagemFallbackDirect() {
-  const nomes = ENTREGAS.map(e => e.nome).join(', ');
-
   return `Entendi. 👋
 
-Para eu te ajudar melhor, me diga o nome do material que você quer.
+Para eu te ajudar melhor, me diga rapidamente o que você procura:
 
-Opções:
-${nomes || 'Nenhum material configurado ainda.'}
-
-Se preferir, escreva "falar com Alberto".
+• material gratuito
+• consultoria
+• treinamento
+• imersão
+• falar com Alberto
 
 — @albertobri7o`;
 }
 
-function montarMensagemDuvida() {
-  const nomes = ENTREGAS.map(e => e.nome).join(', ');
+// ================= ESTADO =================
 
-  return `Entendi sua dúvida. 👋
+function setEstadoDirect(senderId, etapa, dados = {}) {
+  estadosDirect.set(String(senderId), {
+    etapa,
+    dados,
+    atualizadoEm: Date.now()
+  });
 
-Me diga qual assunto você quer aprofundar.
+  console.log(`🧭 Estado do Direct atualizado para ${senderId}: ${etapa}`);
+}
 
-Materiais disponíveis:
-${nomes || 'Nenhum material configurado ainda.'}
+function getEstadoDirect(senderId) {
+  const estado = estadosDirect.get(String(senderId));
 
-Se preferir, escreva "falar com Alberto".
+  if (!estado) return null;
 
-— @albertobri7o`;
+  if (Date.now() - estado.atualizadoEm > TEMPO_ESTADO_DIRECT_MS) {
+    estadosDirect.delete(String(senderId));
+    return null;
+  }
+
+  return estado;
+}
+
+function clearEstadoDirect(senderId) {
+  estadosDirect.delete(String(senderId));
+  console.log(`🧭 Estado do Direct limpo para ${senderId}`);
 }
 
 // ================= CONFIG PARSERS =================
@@ -1296,17 +962,6 @@ function carregarEntregas() {
     console.error('❌ Erro ao ler ENTREGAS_JSON:', error.message);
     return [];
   }
-}
-
-function csvEnv(nome, padrao = []) {
-  const raw = process.env[nome];
-
-  if (!raw) return padrao;
-
-  return raw
-    .split(',')
-    .map(item => item.trim())
-    .filter(Boolean);
 }
 
 function boolEnv(nome, padrao) {
@@ -1359,6 +1014,10 @@ function normalizar(texto = '') {
     .replace(/[\u0300-\u036f]/g, '')
     .toUpperCase()
     .trim();
+}
+
+function limparResposta(valor = '') {
+  return String(valor || '').trim();
 }
 
 function limparCacheProcessados() {
@@ -1418,7 +1077,7 @@ function validarVariaveis() {
   }
 
   if (!OPENAI_API_KEY) {
-    console.warn('⚠️ OPENAI_API_KEY ausente. Classificação por IA ficará desativada.');
+    console.warn('⚠️ OPENAI_API_KEY ausente. IA ficará desativada.');
   }
 
   if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) {
@@ -1444,6 +1103,5 @@ app.listen(PORT, () => {
   console.log(`🔐 IG_ACCESS_TOKEN: ${mascararToken(IG_ACCESS_TOKEN)}`);
 
   console.log(`💬 RESPONDER_DIRECT: ${RESPONDER_DIRECT ? '✅' : '❌'}`);
-  console.log(`🧭 Estado de Direct: ✅`);
-  console.log(`🤖 IA configurada: ${OPENAI_API_KEY ? '✅' : '❌'}`);
+  console.log(`🧠 IA roteadora: ${OPENAI_API_KEY ? '✅' : '❌'}`);
 });
