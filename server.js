@@ -1,16 +1,6 @@
-// server.js — Webhook Instagram com múltiplas entregas + IA + alerta humano
-// Autor: @albertobri7o
-//
-// Fluxo:
-// 1. CADERNO, WORD, EXCEL, IA, AUTOMAÇÃO e FINANCEIRO -> entrega automática
-// 2. Pedido humano -> DM + alerta Telegram
-// 3. Crítica/ofensa -> resposta curta/sem briga + alerta Telegram
-// 4. Comentário restante -> IA classifica
-//
-// IMPORTANTE:
-// - Resposta pública ao comentário: Graph Instagram /{commentId}/replies
-// - Private Reply/Direct: Graph Instagram /{IG_USER_ID}/messages com recipient.comment_id
-// - Configure IG_ACCESS_TOKEN no Railway com o token gerado no caso de uso Instagram Business.
+// server.js — Instagram Bot @albertobri7o
+// Comentários + Direct com IA + Telegram
+// Versão: direct-ia
 
 import express from 'express';
 import crypto from 'crypto';
@@ -19,67 +9,45 @@ import OpenAI from 'openai';
 const app = express();
 
 app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
+  verify: (req, res, buf) => { req.rawBody = buf; }
 }));
 
-// ================= CONFIGURAÇÕES =================
+// ================= CONFIG =================
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const APP_SECRET = process.env.APP_SECRET;
 
-const ACCESS_TOKEN = limparToken(
-  process.env.ACCESS_TOKEN ||
-  process.env.IG_ACCESS_TOKEN ||
-  process.env.PAGE_ACCESS_TOKEN
-);
-
-const PAGE_ACCESS_TOKEN = limparToken(process.env.PAGE_ACCESS_TOKEN);
-const IG_ACCESS_TOKEN = limparToken(
-  process.env.IG_ACCESS_TOKEN ||
-  process.env.ACCESS_TOKEN ||
-  process.env.PAGE_ACCESS_TOKEN
-);
+const GRAPH_VERSION = process.env.GRAPH_VERSION || 'v25.0';
 
 const IG_USER_ID = process.env.IG_USER_ID;
 const PAGE_ID = process.env.PAGE_ID;
+const IG_USERNAME = normalizar(process.env.IG_USERNAME || 'albertobri7o');
 
-const IG_USERNAME = normalizar(
-  process.env.IG_USERNAME || 'albertobri7o'
-);
+// ACCESS_TOKEN: usado para responder comentário publicamente.
+// IG_ACCESS_TOKEN: usado para Private Reply e Direct.
+const ACCESS_TOKEN = limparToken(process.env.ACCESS_TOKEN || process.env.IG_ACCESS_TOKEN);
+const IG_ACCESS_TOKEN = limparToken(process.env.IG_ACCESS_TOKEN);
+const PAGE_ACCESS_TOKEN = limparToken(process.env.PAGE_ACCESS_TOKEN);
 
-const GRAPH_VERSION = process.env.GRAPH_VERSION || 'v25.0';
-
-const RESPONDER_PUBLICO =
-  (process.env.RESPONDER_PUBLICO || 'true').toLowerCase() === 'true';
-
-const ENVIAR_PRIVATE_REPLY =
-  (process.env.ENVIAR_PRIVATE_REPLY || 'true').toLowerCase() === 'true';
+const RESPONDER_PUBLICO = (process.env.RESPONDER_PUBLICO || 'true').toLowerCase() === 'true';
+const ENVIAR_PRIVATE_REPLY = (process.env.ENVIAR_PRIVATE_REPLY || 'true').toLowerCase() === 'true';
+const RESPONDER_DIRECT = (process.env.RESPONDER_DIRECT || 'true').toLowerCase() === 'true';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
-const openai = OPENAI_API_KEY
-  ? new OpenAI({ apiKey: OPENAI_API_KEY })
-  : null;
-
-// Cache simples para evitar processar comentário duplicado.
-// Em produção com escala maior, o ideal é Redis/Postgres.
 const comentariosProcessados = new Map();
+const mensagensProcessadas = new Map();
+const TEMPO_CACHE_MS = Number(process.env.TEMPO_CACHE_MS || 1000 * 60 * 60 * 24);
 
-const TEMPO_CACHE_MS = Number(
-  process.env.TEMPO_CACHE_MS || 1000 * 60 * 60 * 24
-);
-
-// ================= ENTREGAS FIXAS =================
+// ================= ENTREGAS =================
 
 const ENTREGAS = [
   {
     nome: 'Caderno',
     palavras: ['CADERNO'],
     link: process.env.LINK_CHECKOUT_CADERNO,
-    tipo: 'checkout',
     comentario: 'te mandei o link no direct! 📩',
     tituloDm: 'material Caderno'
   },
@@ -87,7 +55,6 @@ const ENTREGAS = [
     nome: 'Word',
     palavras: ['WORD'],
     link: process.env.LINK_CHECKOUT_WORD,
-    tipo: 'checkout',
     comentario: 'te mandei o link no direct! 📩',
     tituloDm: 'material de Word'
   },
@@ -95,7 +62,6 @@ const ENTREGAS = [
     nome: 'Excel',
     palavras: ['EXCEL'],
     link: process.env.LINK_CHECKOUT_EXCEL,
-    tipo: 'checkout',
     comentario: 'te mandei o link no direct! 📩',
     tituloDm: 'material de Excel'
   },
@@ -103,7 +69,6 @@ const ENTREGAS = [
     nome: 'IA',
     palavras: ['IA', 'INTELIGENCIA ARTIFICIAL', 'INTELIGÊNCIA ARTIFICIAL'],
     link: process.env.LINK_CHECKOUT_IA,
-    tipo: 'checkout',
     comentario: 'te mandei o link no direct! 📩',
     tituloDm: 'material de IA'
   },
@@ -111,7 +76,6 @@ const ENTREGAS = [
     nome: 'Automação',
     palavras: ['AUTOMACAO', 'AUTOMAÇÃO'],
     link: process.env.LINK_CHECKOUT_AUTOMACAO,
-    tipo: 'checkout',
     comentario: 'te mandei o link no direct! 📩',
     tituloDm: 'material de automação'
   },
@@ -119,36 +83,49 @@ const ENTREGAS = [
     nome: 'Financeiro',
     palavras: ['FINANCEIRO', 'PLANILHA FINANCEIRA', 'PLANILHA DE FINANCAS', 'PLANILHA DE FINANÇAS'],
     link: process.env.LINK_DRIVE_FINANCEIRO,
-    tipo: 'drive',
     comentario: 'te mandei a planilha no direct! 📩',
     tituloDm: 'planilha de finanças pessoais'
   }
 ];
 
-// ================= INTENÇÕES HUMANAS =================
-
 const PALAVRAS_HUMANO = [
-  'FALAR COM VOCE',
-  'FALAR COM VOCÊ',
-  'QUERO FALAR',
-  'ME CHAMA',
-  'ME CHAME',
-  'CHAMA NO DIRECT',
-  'CHAMA NO PRIVADO',
-  'ATENDIMENTO',
-  'SUPORTE',
-  'CONSULTORIA',
-  'ORCAMENTO',
-  'ORÇAMENTO',
-  'ALBERTO',
-  'HUMANO',
-  'DUVIDA',
-  'DÚVIDA'
+  'FALAR COM VOCE', 'FALAR COM VOCÊ', 'QUERO FALAR', 'ME CHAMA', 'ME CHAME',
+  'CHAMA NO DIRECT', 'CHAMA NO PRIVADO', 'ATENDIMENTO', 'SUPORTE',
+  'CONSULTORIA', 'ORCAMENTO', 'ORÇAMENTO', 'ALBERTO', 'HUMANO'
 ];
+
+const PALAVRAS_TREINAMENTO = [
+  'TREINAMENTO', 'TREINAMENTOS', 'CURSO', 'CURSOS', 'AULA', 'AULAS',
+  'MENTORIA', 'CAPACITACAO', 'CAPACITAÇÃO', 'EQUIPE', 'EMPRESA',
+  'TURMA', 'WORKSHOP', 'APRENDER MAIS', 'SABER MAIS'
+];
+
+const PALAVRAS_PRECO = [
+  'PRECO', 'PREÇO', 'VALOR', 'CUSTA', 'QUANTO', 'COMPRAR',
+  'PAGAMENTO', 'LINK', 'CHECKOUT'
+];
+
+const PALAVRAS_CRITICA = [
+  'ERRADO', 'NAO FUNCIONA', 'NÃO FUNCIONA', 'MENTIRA', 'FAKE', 'GOLPE',
+  'RUIM', 'FRACO', 'NAO CONCORDO', 'NÃO CONCORDO', 'COMPLICADO',
+  'CONFUSO', 'NAO ENTENDI', 'NÃO ENTENDI', 'EXPLICA MELHOR',
+  'ISSO ESTA ERRADO', 'ISSO ESTÁ ERRADO', 'NAO E BEM ASSIM',
+  'NÃO É BEM ASSIM', 'CONTEUDO RASO', 'CONTEÚDO RASO'
+];
+
+const PALAVRAS_OFENSA = [
+  'IDIOTA', 'BURRO', 'PALHACO', 'PALHAÇO', 'LIXO',
+  'MERDA', 'VAI TOMAR', 'OTARIO', 'OTÁRIO'
+];
+
+// ================= MENSAGENS =================
+
+const MENSAGEM_COMENTARIO_ERRO =
+  process.env.MENSAGEM_COMENTARIO_ERRO || 'me chama no direct que eu te envio 📩';
 
 const MENSAGEM_HUMANO_DM =
   process.env.MENSAGEM_HUMANO_DM ||
-  `Claro! 👋
+`Claro! 👋
 
 Sou o assistente do Alberto.
 
@@ -158,54 +135,14 @@ Enquanto isso, me diga aqui em uma mensagem rápida qual é sua dúvida.
 — @albertobri7o`;
 
 const MENSAGEM_HUMANO_COMENTARIO =
-  process.env.MENSAGEM_HUMANO_COMENTARIO ||
-  'te chamei no direct para entender melhor 📩';
-
-// ================= CRÍTICA / OFENSA =================
-
-const PALAVRAS_CRITICA = [
-  'ERRADO',
-  'NAO FUNCIONA',
-  'NÃO FUNCIONA',
-  'MENTIRA',
-  'FAKE',
-  'GOLPE',
-  'RUIM',
-  'FRACO',
-  'NAO CONCORDO',
-  'NÃO CONCORDO',
-  'COMPLICADO',
-  'CONFUSO',
-  'NAO ENTENDI',
-  'NÃO ENTENDI',
-  'EXPLICA MELHOR',
-  'ISSO ESTA ERRADO',
-  'ISSO ESTÁ ERRADO',
-  'NAO E BEM ASSIM',
-  'NÃO É BEM ASSIM',
-  'CONTEUDO RASO',
-  'CONTEÚDO RASO'
-];
-
-const PALAVRAS_OFENSA = [
-  'IDIOTA',
-  'BURRO',
-  'PALHACO',
-  'PALHAÇO',
-  'LIXO',
-  'MERDA',
-  'VAI TOMAR',
-  'OTARIO',
-  'OTÁRIO'
-];
+  process.env.MENSAGEM_HUMANO_COMENTARIO || 'te chamei no direct para entender melhor 📩';
 
 const MENSAGEM_CRITICA_COMENTARIO =
-  process.env.MENSAGEM_CRITICA_COMENTARIO ||
-  'obrigado pelo toque. Vou olhar isso com atenção.';
+  process.env.MENSAGEM_CRITICA_COMENTARIO || 'obrigado pelo toque. Vou olhar isso com atenção.';
 
 const MENSAGEM_CRITICA_DM =
   process.env.MENSAGEM_CRITICA_DM ||
-  `Oi! 👋
+`Oi! 👋
 
 Vi seu comentário e obrigado por falar.
 
@@ -214,17 +151,40 @@ Pode me explicar rapidamente o que você achou confuso ou errado?
 
 — @albertobri7o`;
 
-const MENSAGEM_COMENTARIO_ERRO =
-  process.env.MENSAGEM_COMENTARIO_ERRO ||
-  'me chama no direct que eu te envio 📩';
+const MENSAGEM_TREINAMENTO =
+  process.env.MENSAGEM_TREINAMENTO ||
+`Legal! 👋
 
-// ================= HEALTHCHECK =================
+O Alberto trabalha com conteúdos e treinamentos práticos de Excel, Word, IA, automação e produtividade.
+
+Para eu te direcionar melhor, me diga uma coisa:
+
+Você quer treinamento para você, para sua equipe ou para sua empresa?
+
+— @albertobri7o`;
+
+const MENSAGEM_ESCOLHER_MATERIAL =
+  process.env.MENSAGEM_ESCOLHER_MATERIAL ||
+`Claro! 👋
+
+Me diga qual material você quer receber:
+
+1. CADERNO
+2. WORD
+3. EXCEL
+4. IA
+5. AUTOMAÇÃO
+6. FINANCEIRO
+
+É só responder com uma dessas palavras.
+
+— @albertobri7o`;
+
+// ================= ROTAS =================
 
 app.get('/', (req, res) => {
   res.send('Bot do Instagram rodando ✅');
 });
-
-// ================= VERIFICAÇÃO DO WEBHOOK =================
 
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
@@ -240,8 +200,6 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
-// ================= RECEBE EVENTOS =================
-
 app.post('/webhook', async (req, res) => {
   if (!assinaturaValida(req)) {
     console.warn('⚠️ Assinatura inválida — ignorando evento');
@@ -253,9 +211,6 @@ app.post('/webhook', async (req, res) => {
   try {
     const body = req.body;
 
-    // Comentários do Instagram costumam chegar como object === 'instagram'.
-    // Eventos de mensagens podem chegar como object === 'page'.
-    // Este bot processa comentários; mensagens do Direct podem ser adicionadas depois.
     if (!['instagram', 'page'].includes(body.object)) {
       console.log(`Evento ignorado: object=${body.object}`);
       return;
@@ -268,10 +223,8 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      // Mantido apenas para log futuro de mensagens.
-      // Se quiser atender respostas no direct depois, implementamos aqui.
       for (const event of entry.messaging || []) {
-        console.log('📩 Evento de mensagem recebido:', JSON.stringify(event));
+        await processarMensagemDirect(event);
       }
     }
   } catch (error) {
@@ -279,25 +232,20 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// ================= LÓGICA PRINCIPAL =================
+// ================= COMENTÁRIOS =================
 
 async function processarComentario(comentario) {
   const commentId = comentario?.id;
   const text = comentario?.text;
   const username = comentario?.from?.username || 'seguidor';
   const fromId = comentario?.from?.id;
-  const usernameNormalizado = normalizar(username);
 
   if (!commentId || !text) {
     console.log('Comentário ignorado: sem id ou sem texto');
     return;
   }
 
-  // Evita que o bot leia as próprias respostas públicas e entre em loop.
-  if (
-    usernameNormalizado === IG_USERNAME ||
-    String(fromId) === String(IG_USER_ID)
-  ) {
+  if (normalizar(username) === IG_USERNAME || String(fromId) === String(IG_USER_ID)) {
     console.log(`Comentário ignorado: feito pelo próprio perfil @${username}`);
     return;
   }
@@ -316,108 +264,94 @@ async function processarComentario(comentario) {
   console.log(`💬 Comentário recebido de @${username}: "${text}"`);
   console.log(`🧩 commentId recebido: ${commentId}`);
 
-  // 1. Primeiro: regras fixas de entrega
   const entregasEncontradas = encontrarEntregas(textoNormalizado);
 
   if (entregasEncontradas.length > 0) {
-    await fluxoEntrega(commentId, username, text, entregasEncontradas);
+    await fluxoEntregaComentario(commentId, username, text, entregasEncontradas);
     return;
   }
 
-  // 2. Segundo: detectar pedido humano
   if (querFalarComHumano(textoNormalizado)) {
-    await fluxoHumano(commentId, username, text);
+    await fluxoHumanoComentario(commentId, username, text);
     return;
   }
 
-  // 3. Terceiro: detectar crítica/ofensa
   if (ehOfensa(textoNormalizado)) {
-    await fluxoOfensa(commentId, username, text);
+    await notificarAlberto(username, text, 'OFENSA / POSSÍVEL MODERAÇÃO');
     return;
   }
 
   if (ehCriticaOuObjecao(textoNormalizado)) {
-    await fluxoCritica(commentId, username, text);
+    await fluxoCriticaComentario(commentId, username, text);
     return;
   }
 
-  // 4. Quarto: IA classifica o que sobrou
-  const classificacao = await classificarComIA(text);
+  const classificacao = await classificarComIA(text, 'comentario');
 
-  console.log('🤖 Classificação IA:', classificacao);
+  console.log('🤖 Classificação IA comentário:', classificacao);
 
-  // 5. Se for delicado, notifica Alberto e não responde demais
-  if (classificacao.tipo === 'DELICADO') {
-    await notificarAlberto(username, text, 'DELICADO / REVISAR');
+  if (['DELICADO'].includes(classificacao.tipo)) {
+    await notificarAlberto(username, text, 'COMENTÁRIO DELICADO / REVISAR');
     return;
   }
 
-  if (classificacao.tipo === 'ENTREGA') {
-    await fluxoInteresse(commentId, username, text, classificacao);
+  if (['ENTREGA', 'INTERESSE'].includes(classificacao.tipo)) {
+    await responderComentarioSeguro(
+      commentId,
+      `@${username} me diga qual material você quer: CADERNO, WORD, EXCEL, IA, AUTOMAÇÃO ou FINANCEIRO.`
+    );
+    await notificarAlberto(username, text, `INTERESSE SEM PALAVRA-CHAVE: ${classificacao.motivo || ''}`);
     return;
   }
 
-  if (classificacao.tipo === 'CRITICA') {
-    await fluxoCritica(commentId, username, text);
-    return;
-  }
-
-  if (classificacao.tipo === 'OFENSA') {
-    await fluxoOfensa(commentId, username, text);
+  if (classificacao.tipo === 'TREINAMENTO') {
+    await enviarPrivateReplySeguro(commentId, MENSAGEM_TREINAMENTO);
+    await responderComentarioSeguro(commentId, `@${username} te chamei no direct para te explicar melhor 📩`);
+    await notificarAlberto(username, text, 'LEAD DE TREINAMENTO NO COMENTÁRIO');
     return;
   }
 
   if (classificacao.tipo === 'HUMANO') {
-    await fluxoHumano(commentId, username, text);
+    await fluxoHumanoComentario(commentId, username, text);
+    return;
+  }
+
+  if (classificacao.tipo === 'CRITICA') {
+    await fluxoCriticaComentario(commentId, username, text);
     return;
   }
 
   if (classificacao.tipo === 'DUVIDA') {
-    await fluxoDuvida(commentId, username, text, classificacao);
-    return;
-  }
+    await enviarPrivateReplySeguro(commentId, `Oi! 👋
 
-  if (classificacao.tipo === 'INTERESSE') {
-    await fluxoInteresse(commentId, username, text, classificacao);
+Vi sua dúvida no comentário.
+
+Me responde aqui com mais detalhes que eu tento te ajudar ou encaminho para o Alberto.
+
+— @albertobri7o`);
+
+    await responderComentarioSeguro(commentId, `@${username} te chamei no direct para entender melhor 📩`);
+    await notificarAlberto(username, text, `DÚVIDA DETECTADA: ${classificacao.motivo || ''}`);
     return;
   }
 
   console.log(`Comentário sem ação automática: "${text}"`);
 }
 
-// ================= FLUXOS =================
-
-async function fluxoEntrega(commentId, username, comentarioOriginal, entregas) {
+async function fluxoEntregaComentario(commentId, username, comentarioOriginal, entregas) {
   const entregasValidas = entregas.filter(e => e.link);
 
   if (entregasValidas.length === 0) {
-    console.error(
-      `❌ Nenhum link configurado para: ${entregas.map(e => e.nome).join(', ')}`
-    );
-
-    await notificarAlberto(
-      username,
-      comentarioOriginal,
-      `LINK NÃO CONFIGURADO: ${entregas.map(e => e.nome).join(', ')}`
-    );
-
-    if (RESPONDER_PUBLICO) {
-      await responderComentarioSeguro(
-        commentId,
-        `@${username} ${MENSAGEM_COMENTARIO_ERRO}`
-      );
-    }
-
+    await notificarAlberto(username, comentarioOriginal, `LINK NÃO CONFIGURADO: ${entregas.map(e => e.nome).join(', ')}`);
+    await responderComentarioSeguro(commentId, `@${username} ${MENSAGEM_COMENTARIO_ERRO}`);
     return;
   }
 
   let dmEnviada = false;
 
-  const mensagemDm = montarMensagemEntrega(entregasValidas);
-
   if (ENVIAR_PRIVATE_REPLY) {
     try {
-      await enviarPrivateReply(commentId, mensagemDm);
+      await enviarPrivateReply(commentId, montarMensagemEntrega(entregasValidas));
       dmEnviada = true;
       console.log(`✅ Entrega enviada para @${username}: ${entregasValidas.map(e => e.nome).join(', ')}`);
     } catch (error) {
@@ -427,120 +361,201 @@ async function fluxoEntrega(commentId, username, comentarioOriginal, entregas) {
   }
 
   if (RESPONDER_PUBLICO) {
-    const mensagemPublica = dmEnviada
-      ? `@${username} ${mensagemComentarioEntrega(entregasValidas)}`
-      : `@${username} ${MENSAGEM_COMENTARIO_ERRO}`;
-
-    await responderComentarioSeguro(commentId, mensagemPublica);
+    await responderComentarioSeguro(
+      commentId,
+      dmEnviada
+        ? `@${username} ${mensagemComentarioEntrega(entregasValidas)}`
+        : `@${username} ${MENSAGEM_COMENTARIO_ERRO}`
+    );
   }
 }
 
-async function fluxoHumano(commentId, username, comentarioOriginal) {
-  console.log(`🙋 Pedido humano detectado: @${username}`);
-
+async function fluxoHumanoComentario(commentId, username, comentarioOriginal) {
   let dmEnviada = false;
 
-  if (ENVIAR_PRIVATE_REPLY) {
-    try {
-      await enviarPrivateReply(commentId, MENSAGEM_HUMANO_DM);
-      dmEnviada = true;
-    } catch (error) {
-      console.error('Erro ao enviar DM humana:', error.message);
-    }
+  try {
+    await enviarPrivateReply(commentId, MENSAGEM_HUMANO_DM);
+    dmEnviada = true;
+  } catch (error) {
+    console.error('Erro ao enviar DM humana:', error.message);
   }
 
   await notificarAlberto(username, comentarioOriginal, 'PEDIDO PARA FALAR COM ALBERTO');
 
   if (RESPONDER_PUBLICO) {
-    const mensagemPublica = dmEnviada
-      ? `@${username} ${MENSAGEM_HUMANO_COMENTARIO}`
-      : `@${username} me chama no direct que eu te respondo 📩`;
-
-    await responderComentarioSeguro(commentId, mensagemPublica);
+    await responderComentarioSeguro(
+      commentId,
+      dmEnviada
+        ? `@${username} ${MENSAGEM_HUMANO_COMENTARIO}`
+        : `@${username} me chama no direct que eu te respondo 📩`
+    );
   }
 }
 
-async function fluxoCritica(commentId, username, comentarioOriginal) {
-  console.log(`⚠️ Crítica/objeção detectada: @${username}`);
-
+async function fluxoCriticaComentario(commentId, username, comentarioOriginal) {
   await notificarAlberto(username, comentarioOriginal, 'CRÍTICA / OBJEÇÃO');
 
-  if (ENVIAR_PRIVATE_REPLY) {
-    try {
-      await enviarPrivateReply(commentId, MENSAGEM_CRITICA_DM);
-    } catch (error) {
-      console.error('Erro ao enviar DM crítica:', error.message);
+  try {
+    await enviarPrivateReply(commentId, MENSAGEM_CRITICA_DM);
+  } catch (error) {
+    console.error('Erro ao enviar DM crítica:', error.message);
+  }
+
+  if (RESPONDER_PUBLICO) {
+    await responderComentarioSeguro(commentId, `@${username} ${MENSAGEM_CRITICA_COMENTARIO}`);
+  }
+}
+
+// ================= DIRECT =================
+
+async function processarMensagemDirect(event) {
+  if (!RESPONDER_DIRECT) {
+    console.log('Direct ignorado: RESPONDER_DIRECT=false');
+    return;
+  }
+
+  const senderId = event?.sender?.id;
+  const message = event?.message;
+  const text = message?.text;
+  const mid = message?.mid;
+
+  if (!senderId || !message) {
+    return;
+  }
+
+  if (message?.is_echo || String(senderId) === String(IG_USER_ID)) {
+    console.log('Direct ignorado: echo/próprio bot');
+    return;
+  }
+
+  if (!text) {
+    console.log('Direct recebido sem texto. Ignorando por enquanto.');
+    return;
+  }
+
+  limparCacheProcessados();
+
+  if (mid && mensagensProcessadas.has(mid)) {
+    console.log(`Direct já processado: ${mid}`);
+    return;
+  }
+
+  if (mid) {
+    mensagensProcessadas.set(mid, Date.now());
+  }
+
+  const textoNormalizado = normalizar(text);
+  const usuarioDirect = `ig_user_${senderId}`;
+
+  console.log(`📩 DM recebida de ${senderId}: "${text}"`);
+
+  const entregasEncontradas = encontrarEntregas(textoNormalizado);
+
+  if (entregasEncontradas.length > 0) {
+    const entregasValidas = entregasEncontradas.filter(e => e.link);
+
+    if (entregasValidas.length === 0) {
+      await enviarMensagemDirect(senderId, MENSAGEM_ESCOLHER_MATERIAL);
+      await notificarAlberto(usuarioDirect, text, 'DM COM PALAVRA-CHAVE SEM LINK CONFIGURADO');
+      return;
     }
+
+    await enviarMensagemDirect(senderId, montarMensagemEntrega(entregasValidas));
+    await notificarAlberto(usuarioDirect, text, `DM: ENTREGA ENVIADA (${entregasValidas.map(e => e.nome).join(', ')})`);
+    return;
   }
 
-  if (RESPONDER_PUBLICO) {
-    await responderComentarioSeguro(
-      commentId,
-      `@${username} ${MENSAGEM_CRITICA_COMENTARIO}`
-    );
+  if (ehTreinamento(textoNormalizado)) {
+    await enviarMensagemDirect(senderId, MENSAGEM_TREINAMENTO);
+    await notificarAlberto(usuarioDirect, text, 'LEAD DE TREINAMENTO NO DIRECT');
+    return;
   }
+
+  if (ehPrecoOuCompra(textoNormalizado)) {
+    await enviarMensagemDirect(senderId, MENSAGEM_ESCOLHER_MATERIAL);
+    await notificarAlberto(usuarioDirect, text, 'DM: INTERESSE EM PREÇO/COMPRA SEM MATERIAL DEFINIDO');
+    return;
+  }
+
+  if (querFalarComHumano(textoNormalizado)) {
+    await enviarMensagemDirect(senderId, MENSAGEM_HUMANO_DM);
+    await notificarAlberto(usuarioDirect, text, 'DM: PEDIDO PARA FALAR COM ALBERTO');
+    return;
+  }
+
+  if (ehOfensa(textoNormalizado)) {
+    await notificarAlberto(usuarioDirect, text, 'DM: OFENSA / POSSÍVEL MODERAÇÃO');
+    return;
+  }
+
+  if (ehCriticaOuObjecao(textoNormalizado)) {
+    await enviarMensagemDirect(senderId, MENSAGEM_CRITICA_DM);
+    await notificarAlberto(usuarioDirect, text, 'DM: CRÍTICA / OBJEÇÃO');
+    return;
+  }
+
+  const classificacao = await classificarComIA(text, 'direct');
+
+  console.log('🤖 Classificação IA direct:', classificacao);
+
+  if (classificacao.tipo === 'TREINAMENTO') {
+    await enviarMensagemDirect(senderId, MENSAGEM_TREINAMENTO);
+    await notificarAlberto(usuarioDirect, text, `DM: LEAD TREINAMENTO IA — ${classificacao.motivo || ''}`);
+    return;
+  }
+
+  if (['HUMANO', 'DELICADO'].includes(classificacao.tipo)) {
+    await enviarMensagemDirect(senderId, MENSAGEM_HUMANO_DM);
+    await notificarAlberto(usuarioDirect, text, `DM: ${classificacao.tipo} — ${classificacao.motivo || ''}`);
+    return;
+  }
+
+  if (['ENTREGA', 'INTERESSE'].includes(classificacao.tipo)) {
+    await enviarMensagemDirect(senderId, MENSAGEM_ESCOLHER_MATERIAL);
+    await notificarAlberto(usuarioDirect, text, `DM: INTERESSE IA — ${classificacao.motivo || ''}`);
+    return;
+  }
+
+  if (classificacao.tipo === 'DUVIDA') {
+    await enviarMensagemDirect(senderId, `Entendi sua dúvida. 👋
+
+Me diga qual assunto você quer aprofundar:
+
+1. Excel
+2. Word
+3. IA
+4. Automação
+5. Treinamento para equipe
+
+Se preferir, escreva "falar com Alberto".
+
+— @albertobri7o`);
+
+    await notificarAlberto(usuarioDirect, text, `DM: DÚVIDA IA — ${classificacao.motivo || ''}`);
+    return;
+  }
+
+  if (classificacao.tipo === 'CRITICA') {
+    await enviarMensagemDirect(senderId, MENSAGEM_CRITICA_DM);
+    await notificarAlberto(usuarioDirect, text, `DM: CRÍTICA IA — ${classificacao.motivo || ''}`);
+    return;
+  }
+
+  if (classificacao.tipo === 'OFENSA') {
+    await notificarAlberto(usuarioDirect, text, `DM: OFENSA IA — ${classificacao.motivo || ''}`);
+    return;
+  }
+
+  await enviarMensagemDirect(senderId, `Entendi. 👋
+
+Para eu te ajudar melhor, me diga uma palavra:
+
+WORD, EXCEL, IA, AUTOMAÇÃO, FINANCEIRO ou TREINAMENTO.
+
+— @albertobri7o`);
 }
 
-async function fluxoOfensa(commentId, username, comentarioOriginal) {
-  console.log(`🚫 Ofensa detectada: @${username}`);
-
-  await notificarAlberto(username, comentarioOriginal, 'OFENSA / POSSÍVEL MODERAÇÃO');
-
-  // Para ofensa, não responde publicamente.
-  // Evita alimentar discussão.
-}
-
-async function fluxoDuvida(commentId, username, comentarioOriginal, classificacao) {
-  console.log(`❓ Dúvida detectada: @${username}`);
-
-  const mensagem = `Oi! 👋
-
-Vi sua dúvida no comentário.
-
-Me responde aqui com mais detalhes que eu tento te ajudar ou encaminho para o Alberto.
-
-— @albertobri7o`;
-
-  if (ENVIAR_PRIVATE_REPLY) {
-    try {
-      await enviarPrivateReply(commentId, mensagem);
-    } catch (error) {
-      console.error('Erro ao enviar DM dúvida:', error.message);
-    }
-  }
-
-  await notificarAlberto(
-    username,
-    comentarioOriginal,
-    `DÚVIDA DETECTADA: ${classificacao?.motivo || 'sem motivo informado'}`
-  );
-
-  if (RESPONDER_PUBLICO) {
-    await responderComentarioSeguro(
-      commentId,
-      `@${username} te chamei no direct para entender melhor 📩`
-    );
-  }
-}
-
-async function fluxoInteresse(commentId, username, comentarioOriginal, classificacao) {
-  console.log(`👀 Interesse detectado: @${username}`);
-
-  await notificarAlberto(
-    username,
-    comentarioOriginal,
-    `INTERESSE SEM PALAVRA-CHAVE: ${classificacao?.motivo || 'sem motivo informado'}`
-  );
-
-  if (RESPONDER_PUBLICO) {
-    await responderComentarioSeguro(
-      commentId,
-      `@${username} me diga qual material você quer: CADERNO, WORD, EXCEL, IA, AUTOMAÇÃO ou FINANCEIRO.`
-    );
-  }
-}
-
-// ================= API META =================
+// ================= META API =================
 
 async function responderComentario(commentId, mensagem) {
   if (!ACCESS_TOKEN) {
@@ -577,10 +592,16 @@ async function responderComentarioSeguro(commentId, mensagem) {
   }
 }
 
-// FUNÇÃO ALTERADA:
-// Agora usa o endpoint do Instagram Business:
-// POST https://graph.instagram.com/v25.0/{IG_USER_ID}/messages
-// com recipient.comment_id.
+async function enviarPrivateReplySeguro(commentId, mensagem) {
+  try {
+    await enviarPrivateReply(commentId, mensagem);
+    return true;
+  } catch (error) {
+    console.error('❌ Erro ao enviar Private Reply:', error.message);
+    return false;
+  }
+}
+
 async function enviarPrivateReply(commentId, mensagem) {
   if (!IG_ACCESS_TOKEN) {
     throw new Error('IG_ACCESS_TOKEN não configurado');
@@ -615,9 +636,43 @@ async function enviarPrivateReply(commentId, mensagem) {
   return response.json();
 }
 
+async function enviarMensagemDirect(recipientId, mensagem) {
+  if (!IG_ACCESS_TOKEN) {
+    throw new Error('IG_ACCESS_TOKEN não configurado');
+  }
+
+  if (!IG_USER_ID) {
+    throw new Error('IG_USER_ID não configurado');
+  }
+
+  const url = `https://graph.instagram.com/${GRAPH_VERSION}/${IG_USER_ID}/messages`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${IG_ACCESS_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      recipient: {
+        id: String(recipientId)
+      },
+      message: {
+        text: mensagem
+      }
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`${response.status}: ${await response.text()}`);
+  }
+
+  return response.json();
+}
+
 // ================= IA =================
 
-async function classificarComIA(texto) {
+async function classificarComIA(texto, origem = 'comentario') {
   if (!openai) {
     return {
       tipo: 'IGNORAR',
@@ -628,21 +683,27 @@ async function classificarComIA(texto) {
 
   try {
     const prompt = `
-Classifique o comentário abaixo para um perfil brasileiro de conteúdo sobre tecnologia, Excel, Word, IA, automação, produtividade e planilhas.
+Você é a camada de interpretação de um bot do Instagram do perfil @albertobri7o.
 
-Comentário:
+O perfil vende/entrega conteúdos sobre Word, Excel, IA, automação, planilha financeira,
+produtividade, tecnologia aplicada ao trabalho e treinamentos para pessoas/equipes/empresas.
+
+Origem da mensagem: ${origem}
+
+Mensagem do usuário:
 "${texto}"
 
-Responda APENAS em JSON válido, neste formato:
+Classifique APENAS em JSON válido:
 {
-  "tipo": "ENTREGA|HUMANO|CRITICA|OFENSA|DUVIDA|INTERESSE|ELOGIO|SPAM|DELICADO|IGNORAR",
+  "tipo": "ENTREGA|HUMANO|CRITICA|OFENSA|DUVIDA|INTERESSE|TREINAMENTO|ELOGIO|SPAM|DELICADO|IGNORAR",
   "motivo": "explicação curta",
   "confianca": 0.0
 }
 
 Regras:
-- ENTREGA: quando a pessoa quer claramente um material, mas não usou palavra-chave exata.
-- HUMANO: quando quer falar com Alberto, suporte, orçamento, consultoria ou atendimento.
+- TREINAMENTO: quer saber sobre treinamentos, cursos, aulas, mentoria, capacitação, equipe, empresa ou aprender com Alberto.
+- ENTREGA: quer claramente algum material/link, mas não usou palavra-chave exata.
+- HUMANO: quer falar com Alberto, suporte, orçamento, consultoria ou atendimento.
 - CRITICA: crítica, objeção ou discordância educada.
 - OFENSA: ataque pessoal, xingamento ou agressividade.
 - DUVIDA: pergunta real sobre o conteúdo.
@@ -660,7 +721,6 @@ Regras:
     });
 
     const output = response.output_text || '';
-
     const json = extrairJson(output);
 
     if (!json?.tipo) {
@@ -702,9 +762,9 @@ function extrairJson(texto) {
   }
 }
 
-// ================= TELEGRAM / NOTIFICAÇÃO =================
+// ================= TELEGRAM =================
 
-async function notificarAlberto(username, comentario, tipo) {
+async function notificarAlberto(username, mensagemRecebida, tipo) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
 
@@ -713,24 +773,26 @@ async function notificarAlberto(username, comentario, tipo) {
     return;
   }
 
+  const perfil = String(username).startsWith('ig_user_')
+    ? 'Usuário do Direct'
+    : `https://instagram.com/${username}`;
+
   const mensagem = `🔔 Instagram Bot — ${tipo}
 
 Usuário: @${username}
 
-Comentário:
-${comentario}
+Mensagem:
+${mensagemRecebida}
 
 Perfil:
-https://instagram.com/${username}`;
+${perfil}`;
 
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
 
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: chatId,
         text: mensagem
@@ -747,7 +809,7 @@ https://instagram.com/${username}`;
   }
 }
 
-// ================= BUSCA DE INTENÇÕES =================
+// ================= HELPERS =================
 
 function encontrarEntregas(textoNormalizado) {
   const encontradas = [];
@@ -767,6 +829,18 @@ function encontrarEntregas(textoNormalizado) {
 
 function querFalarComHumano(textoNormalizado) {
   return PALAVRAS_HUMANO.some(palavra =>
+    contemPalavraOuFrase(textoNormalizado, normalizar(palavra))
+  );
+}
+
+function ehTreinamento(textoNormalizado) {
+  return PALAVRAS_TREINAMENTO.some(palavra =>
+    contemPalavraOuFrase(textoNormalizado, normalizar(palavra))
+  );
+}
+
+function ehPrecoOuCompra(textoNormalizado) {
+  return PALAVRAS_PRECO.some(palavra =>
     contemPalavraOuFrase(textoNormalizado, normalizar(palavra))
   );
 }
@@ -793,8 +867,6 @@ function contemPalavraOuFrase(texto, termo) {
 
   return regex.test(texto);
 }
-
-// ================= MENSAGENS =================
 
 function montarMensagemEntrega(entregas) {
   if (entregas.length === 1) {
@@ -835,8 +907,6 @@ function mensagemComentarioEntrega(entregas) {
 
   return 'te mandei os links no direct! 📩';
 }
-
-// ================= SEGURANÇA / UTIL =================
 
 function assinaturaValida(req) {
   const signature = req.get('x-hub-signature-256');
@@ -886,15 +956,18 @@ function limparCacheProcessados() {
       comentariosProcessados.delete(commentId);
     }
   }
+
+  for (const [mid, criadoEm] of mensagensProcessadas.entries()) {
+    if (agora - criadoEm > TEMPO_CACHE_MS) {
+      mensagensProcessadas.delete(mid);
+    }
+  }
 }
 
 function mascararToken(token = '') {
   if (!token) return 'VAZIO';
 
-  const inicio = token.slice(0, 4);
-  const fim = token.slice(-4);
-
-  return `${inicio}...${fim} (${token.length} chars)`;
+  return `${token.slice(0, 4)}...${token.slice(-4)} (${token.length} chars)`;
 }
 
 function validarVariaveis() {
@@ -903,8 +976,7 @@ function validarVariaveis() {
     APP_SECRET,
     ACCESS_TOKEN,
     IG_ACCESS_TOKEN,
-    IG_USER_ID,
-    PAGE_ID
+    IG_USER_ID
   };
 
   for (const [nome, valor] of Object.entries(variaveis)) {
@@ -943,5 +1015,6 @@ app.listen(PORT, () => {
   console.log(`🔐 PAGE_ACCESS_TOKEN: ${mascararToken(PAGE_ACCESS_TOKEN)}`);
   console.log(`🔐 IG_ACCESS_TOKEN: ${mascararToken(IG_ACCESS_TOKEN)}`);
 
+  console.log(`💬 RESPONDER_DIRECT: ${RESPONDER_DIRECT ? '✅' : '❌'}`);
   console.log(`🤖 IA configurada: ${OPENAI_API_KEY ? '✅' : '❌'}`);
 });
