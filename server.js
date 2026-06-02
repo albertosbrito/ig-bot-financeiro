@@ -1,5 +1,16 @@
 // server.js — Webhook Instagram com múltiplas entregas + IA + alerta humano
 // Autor: @albertobri7o
+//
+// Fluxo:
+// 1. CADERNO, WORD, EXCEL, IA, AUTOMAÇÃO e FINANCEIRO -> entrega automática
+// 2. Pedido humano -> DM + alerta Telegram
+// 3. Crítica/ofensa -> resposta curta/sem briga + alerta Telegram
+// 4. Comentário restante -> IA classifica
+//
+// IMPORTANTE:
+// - Resposta pública ao comentário: Graph Instagram /{commentId}/replies
+// - Private Reply/Direct: Graph Instagram /{IG_USER_ID}/messages com recipient.comment_id
+// - Configure IG_ACCESS_TOKEN no Railway com o token gerado no caso de uso Instagram Business.
 
 import express from 'express';
 import crypto from 'crypto';
@@ -18,13 +29,27 @@ app.use(express.json({
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const APP_SECRET = process.env.APP_SECRET;
 
-const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
-const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN || ACCESS_TOKEN;
+const ACCESS_TOKEN = limparToken(
+  process.env.ACCESS_TOKEN ||
+  process.env.IG_ACCESS_TOKEN ||
+  process.env.PAGE_ACCESS_TOKEN
+);
+
+const PAGE_ACCESS_TOKEN = limparToken(process.env.PAGE_ACCESS_TOKEN);
+const IG_ACCESS_TOKEN = limparToken(
+  process.env.IG_ACCESS_TOKEN ||
+  process.env.ACCESS_TOKEN ||
+  process.env.PAGE_ACCESS_TOKEN
+);
 
 const IG_USER_ID = process.env.IG_USER_ID;
 const PAGE_ID = process.env.PAGE_ID;
 
-const GRAPH_VERSION = process.env.GRAPH_VERSION || 'v21.0';
+const IG_USERNAME = normalizar(
+  process.env.IG_USERNAME || 'albertobri7o'
+);
+
+const GRAPH_VERSION = process.env.GRAPH_VERSION || 'v25.0';
 
 const RESPONDER_PUBLICO =
   (process.env.RESPONDER_PUBLICO || 'true').toLowerCase() === 'true';
@@ -228,8 +253,11 @@ app.post('/webhook', async (req, res) => {
   try {
     const body = req.body;
 
-    if (body.object !== 'instagram') {
-      console.log('Evento ignorado: object diferente de instagram');
+    // Comentários do Instagram costumam chegar como object === 'instagram'.
+    // Eventos de mensagens podem chegar como object === 'page'.
+    // Este bot processa comentários; mensagens do Direct podem ser adicionadas depois.
+    if (!['instagram', 'page'].includes(body.object)) {
+      console.log(`Evento ignorado: object=${body.object}`);
       return;
     }
 
@@ -238,6 +266,12 @@ app.post('/webhook', async (req, res) => {
         if (change.field === 'comments') {
           await processarComentario(change.value);
         }
+      }
+
+      // Mantido apenas para log futuro de mensagens.
+      // Se quiser atender respostas no direct depois, implementamos aqui.
+      for (const event of entry.messaging || []) {
+        console.log('📩 Evento de mensagem recebido:', JSON.stringify(event));
       }
     }
   } catch (error) {
@@ -251,9 +285,20 @@ async function processarComentario(comentario) {
   const commentId = comentario?.id;
   const text = comentario?.text;
   const username = comentario?.from?.username || 'seguidor';
+  const fromId = comentario?.from?.id;
+  const usernameNormalizado = normalizar(username);
 
   if (!commentId || !text) {
     console.log('Comentário ignorado: sem id ou sem texto');
+    return;
+  }
+
+  // Evita que o bot leia as próprias respostas públicas e entre em loop.
+  if (
+    usernameNormalizado === IG_USERNAME ||
+    String(fromId) === String(IG_USER_ID)
+  ) {
+    console.log(`Comentário ignorado: feito pelo próprio perfil @${username}`);
     return;
   }
 
@@ -269,6 +314,7 @@ async function processarComentario(comentario) {
   const textoNormalizado = normalizar(text);
 
   console.log(`💬 Comentário recebido de @${username}: "${text}"`);
+  console.log(`🧩 commentId recebido: ${commentId}`);
 
   // 1. Primeiro: regras fixas de entrega
   const entregasEncontradas = encontrarEntregas(textoNormalizado);
@@ -303,6 +349,11 @@ async function processarComentario(comentario) {
   // 5. Se for delicado, notifica Alberto e não responde demais
   if (classificacao.tipo === 'DELICADO') {
     await notificarAlberto(username, text, 'DELICADO / REVISAR');
+    return;
+  }
+
+  if (classificacao.tipo === 'ENTREGA') {
+    await fluxoInteresse(commentId, username, text, classificacao);
     return;
   }
 
@@ -526,26 +577,30 @@ async function responderComentarioSeguro(commentId, mensagem) {
   }
 }
 
+// FUNÇÃO ALTERADA:
+// Agora usa o endpoint do Instagram Business:
+// POST https://graph.instagram.com/v25.0/{IG_USER_ID}/messages
+// com recipient.comment_id.
 async function enviarPrivateReply(commentId, mensagem) {
-  if (!PAGE_ACCESS_TOKEN) {
-    throw new Error('PAGE_ACCESS_TOKEN não configurado');
+  if (!IG_ACCESS_TOKEN) {
+    throw new Error('IG_ACCESS_TOKEN não configurado');
   }
 
-  if (!PAGE_ID) {
-    throw new Error('PAGE_ID não configurado');
+  if (!IG_USER_ID) {
+    throw new Error('IG_USER_ID não configurado');
   }
 
-  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${PAGE_ID}/messages`;
+  const url = `https://graph.instagram.com/${GRAPH_VERSION}/${IG_USER_ID}/messages`;
 
   const response = await fetch(url, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${PAGE_ACCESS_TOKEN}`,
+      Authorization: `Bearer ${IG_ACCESS_TOKEN}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
       recipient: {
-        comment_id: commentId
+        comment_id: String(commentId)
       },
       message: {
         text: mensagem
@@ -807,6 +862,14 @@ function assinaturaValida(req) {
   return crypto.timingSafeEqual(signatureBuffer, expectedBuffer);
 }
 
+function limparToken(valor = '') {
+  return String(valor)
+    .trim()
+    .replace(/^Bearer\s+/i, '')
+    .replace(/^["']|["']$/g, '')
+    .replace(/\s/g, '');
+}
+
 function normalizar(texto = '') {
   return String(texto)
     .normalize('NFD')
@@ -825,12 +888,21 @@ function limparCacheProcessados() {
   }
 }
 
+function mascararToken(token = '') {
+  if (!token) return 'VAZIO';
+
+  const inicio = token.slice(0, 4);
+  const fim = token.slice(-4);
+
+  return `${inicio}...${fim} (${token.length} chars)`;
+}
+
 function validarVariaveis() {
   const variaveis = {
     VERIFY_TOKEN,
     APP_SECRET,
     ACCESS_TOKEN,
-    PAGE_ACCESS_TOKEN,
+    IG_ACCESS_TOKEN,
     IG_USER_ID,
     PAGE_ID
   };
@@ -866,7 +938,10 @@ app.listen(PORT, () => {
   console.log(`🚀 Servidor ouvindo na porta ${PORT}`);
   console.log(`👤 IG_USER_ID configurado: ${IG_USER_ID ? '✅' : '❌'}`);
   console.log(`📄 PAGE_ID configurado: ${PAGE_ID ? '✅' : '❌'}`);
-  console.log(`🔐 ACCESS_TOKEN configurado: ${ACCESS_TOKEN ? '✅' : '❌'}`);
-  console.log(`🔐 PAGE_ACCESS_TOKEN configurado: ${PAGE_ACCESS_TOKEN ? '✅' : '❌'}`);
+
+  console.log(`🔐 ACCESS_TOKEN: ${mascararToken(ACCESS_TOKEN)}`);
+  console.log(`🔐 PAGE_ACCESS_TOKEN: ${mascararToken(PAGE_ACCESS_TOKEN)}`);
+  console.log(`🔐 IG_ACCESS_TOKEN: ${mascararToken(IG_ACCESS_TOKEN)}`);
+
   console.log(`🤖 IA configurada: ${OPENAI_API_KEY ? '✅' : '❌'}`);
 });
