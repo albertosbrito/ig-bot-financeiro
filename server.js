@@ -213,14 +213,26 @@ async function processarMensagemDirect(event) {
 
   limparCacheProcessados();
 
-  if (mid && mensagensProcessadas.has(mid)) {
-    console.log(`Direct já processado: ${mid}`);
+  // Dedup por mid (quando existe) E por conteúdo (senderId+texto) numa janela curta.
+  // Respostas a anúncio podem chegar sem mid, com mid diferente, ou em duplicidade
+  // (objeto instagram + page). A chave de conteúdo cobre todos esses casos.
+  const textoDedup = normalizar(text);
+  const chaveConteudo = `c:${senderId}:${textoDedup}`;
+  const JANELA_DUPLICADO_MS = 15000; // 15s
+  const agoraDedup = Date.now();
+
+  const duplicado =
+    (mid && mensagensProcessadas.has(mid)) ||
+    (mensagensProcessadas.has(chaveConteudo) &&
+      agoraDedup - mensagensProcessadas.get(chaveConteudo) < JANELA_DUPLICADO_MS);
+
+  if (duplicado) {
+    console.log(`Direct duplicado ignorado (mid=${mid || 'sem'} / ${chaveConteudo})`);
     return;
   }
 
-  if (mid) {
-    mensagensProcessadas.set(mid, Date.now());
-  }
+  if (mid) mensagensProcessadas.set(mid, agoraDedup);
+  mensagensProcessadas.set(chaveConteudo, agoraDedup);
 
   const textoNormalizado = normalizar(text);
   const usuarioDirect = `ig_user_${senderId}`;
