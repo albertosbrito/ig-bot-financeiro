@@ -1,11 +1,12 @@
-// server.js — Instagram Bot com IA roteadora + entregas por variável
+// server.js — Instagram Bot com IA roteadora + contexto do produto entregue
 // Autor: @albertobri7o
 //
-// Arquitetura desta versão:
-// 1. Regra fixa SOMENTE para entrega direta via ENTREGAS_JSON.
-// 2. Todo o resto vai para IA: consultoria, imersão, treinamento, orçamento, dúvida, crítica, humano etc.
-// 3. A IA recebe o estado atual da conversa para não repetir pergunta.
-// 4. O código apenas executa a decisão da IA: responder, salvar estado, limpar estado e/ou notificar Alberto.
+// Regra fixa: somente ENTREGAS_JSON.
+// Todo o resto vai para a IA.
+// Correção desta versão:
+// - Quando o bot entrega um produto pelo comentário, ele salva o estado PRODUTO_ENTREGUE.
+// - Se a pessoa perguntar no Direct "Qual é o conteúdo?", "O que vem?", "Quais assuntos?",
+//   o bot responde usando BOT_FUNIL_JSON do produto entregue, sem perguntar novamente qual material é.
 
 import express from 'express';
 import crypto from 'crypto';
@@ -43,17 +44,16 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
 const BOT_NEGOCIO_CONTEXT =
   process.env.BOT_NEGOCIO_CONTEXT ||
-  `Alberto Brito, @albertobri7o, produz conteúdos, materiais, treinamentos, consultorias e imersões sobre Excel, Word, IA, automação, produtividade, Pacote Office, Power BI, dados e tecnologia aplicada ao trabalho.
+  `Alberto Brito, @albertobri7o, vende conteúdos digitais, treinamentos, consultorias e imersões sobre Excel, Word, IA, automação, produtividade, Power BI e dados. Quando a pessoa perguntar sobre consultoria, imersão, empresa, equipe, treinamento, orçamento, aula, curso, mentoria, capacitação ou projeto, trate como lead comercial. Antes de encaminhar para Alberto, qualifique o lead perguntando: para quem é a necessidade, qual é o tema principal, qual é o objetivo e qual é o melhor contato. Não trate consultoria, imersão ou treinamento como simples pedido humano. Caso a pessoa fale sobre outro assunto que não tenha relação com esses temas, responda de forma curta e pergunte se ela gostaria de enviar uma mensagem mais detalhada para Alberto analisar.`;
 
-Quando alguém perguntar sobre consultoria, imersão, treinamento, aula, empresa, equipe, orçamento, capacitação ou projeto, trate como lead comercial e qualifique antes de encaminhar para Alberto.
+const BOT_FUNIL_JSON_RAW = process.env.BOT_FUNIL_JSON || '';
+const BOT_FUNIL = carregarBotFunil(BOT_FUNIL_JSON_RAW);
 
-Não trate consultoria como simples pedido humano. Consultoria, imersão e treinamento precisam de qualificação: público, tema, objetivo e contato.`;
+const openai = OPENAI_API_KEY
+  ? new OpenAI({ apiKey: OPENAI_API_KEY })
+  : null;
 
-const BOT_FUNIL_JSON = process.env.BOT_FUNIL_JSON || '';
-
-const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
-
-// ================= ENTREGAS FIXAS VIA VARIÁVEL =================
+// ================= ENTREGAS =================
 
 const ENTREGAS = carregarEntregas();
 
@@ -155,11 +155,11 @@ async function processarComentario(comentario) {
   console.log(`💬 Comentário recebido de @${username}: "${text}"`);
   console.log(`🧩 commentId recebido: ${commentId}`);
 
-  // REGRA FIXA ÚNICA: entrega direta configurada em ENTREGAS_JSON.
+  // Regra fixa única: entrega por ENTREGAS_JSON.
   const entregasEncontradas = encontrarEntregas(textoNormalizado);
 
   if (entregasEncontradas.length > 0) {
-    await fluxoEntregaComentario(commentId, username, text, entregasEncontradas);
+    await fluxoEntregaComentario(commentId, username, text, entregasEncontradas, fromId);
     return;
   }
 
@@ -224,10 +224,44 @@ async function processarMensagemDirect(event) {
 
   const textoNormalizado = normalizar(text);
   const usuarioDirect = `ig_user_${senderId}`;
+  const estado = getEstadoDirect(senderId);
 
   console.log(`📩 DM recebida de ${senderId}: "${text}"`);
+  console.log('🧭 Estado atual do Direct:', estado ? JSON.stringify(estado) : 'SEM_ESTADO');
 
-  // REGRA FIXA ÚNICA: entrega direta configurada em ENTREGAS_JSON.
+  // 1. Se o usuário recebeu um produto e perguntou sobre conteúdo,
+  // responde de forma determinística usando BOT_FUNIL_JSON.
+  if (estado?.etapa === 'PRODUTO_ENTREGUE' && ehPerguntaSobreConteudo(textoNormalizado)) {
+    const produto = estado?.dados?.produto;
+    const respostaConteudo = respostaConteudoProduto(produto);
+
+    if (respostaConteudo) {
+      await enviarMensagemDirect(senderId, respostaConteudo);
+
+      await notificarAlberto(
+        usuarioDirect,
+        `Mensagem:
+${text}
+
+Produto em contexto:
+${produto}
+
+Ação:
+respondi com o conteúdo do produto usando BOT_FUNIL_JSON.`,
+        `DIRECT — CONTEÚDO DO PRODUTO ${produto || ''}`
+      );
+
+      // Mantém o estado como PRODUTO_ENTREGUE, pois o usuário pode perguntar preço, garantia etc.
+      atualizarEstadoDirect(senderId, {
+        ultimaPergunta: text,
+        ultimaResposta: 'conteudo_produto'
+      });
+
+      return;
+    }
+  }
+
+  // 2. Regra fixa única: entrega por ENTREGAS_JSON.
   const entregasEncontradas = encontrarEntregas(textoNormalizado);
 
   if (entregasEncontradas.length > 0) {
@@ -240,13 +274,25 @@ async function processarMensagemDirect(event) {
     }
 
     await enviarMensagemDirect(senderId, montarMensagemEntrega(entregasValidas));
-    await notificarAlberto(usuarioDirect, text, `DM: ENTREGA ENVIADA (${entregasValidas.map(e => e.nome).join(', ')})`);
+
+    if (entregasValidas.length === 1) {
+      guardarEstadoProdutoEntregue(senderId, entregasValidas[0], text);
+    }
+
+    await notificarAlberto(
+      usuarioDirect,
+      `Mensagem:
+${text}
+
+Entrega enviada:
+${entregasValidas.map(e => e.nome).join(', ')}`,
+      `DM — ENTREGA ENVIADA`
+    );
+
     return;
   }
 
-  // Todo o resto vai para IA, com estado da conversa.
-  const estado = getEstadoDirect(senderId);
-
+  // 3. Todo o resto vai para IA, com estado da conversa.
   const decisao = await decidirComIA({
     origem: 'direct',
     texto: text,
@@ -369,7 +415,8 @@ async function decidirComIA({ origem, texto, username, senderId, estado }) {
     const materiaisDisponiveis = ENTREGAS.map(e => ({
       nome: e.nome,
       palavras: e.palavras,
-      tipo: e.tipo
+      tipo: e.tipo,
+      tituloDm: e.tituloDm
     }));
 
     const prompt = `
@@ -378,8 +425,8 @@ Você é o cérebro de atendimento do Instagram @albertobri7o.
 CONTEXTO DO NEGÓCIO:
 ${BOT_NEGOCIO_CONTEXT}
 
-FUNIL/REGRAS EXTRAS DO USUÁRIO:
-${BOT_FUNIL_JSON || 'Nenhuma regra extra configurada.'}
+BOT_FUNIL_JSON:
+${BOT_FUNIL_JSON_RAW || 'Nenhum funil configurado.'}
 
 ENTREGAS CONFIGURADAS:
 ${JSON.stringify(materiaisDisponiveis, null, 2)}
@@ -400,18 +447,21 @@ SUA TAREFA:
 Decidir a próxima ação do bot.
 
 REGRAS IMPORTANTES:
-1. Não trate "consultoria" como simples humano. Consultoria é lead comercial.
-2. "imersão", "imersao", "masterclass", "aula", "curso", "treinamento" e "capacitação" são lead de treinamento/imersão.
-3. Se o estado atual já estiver aguardando uma resposta, avance a conversa. NÃO repita a pergunta anterior.
-4. Se o estado pergunta "você/equipe/empresa" e o usuário responde "empresa", avance para perguntar o tema/objetivo.
-5. Se o usuário pergunta "ele dá consultoria?", responda que sim e pergunte se é para pessoa, equipe ou empresa.
-6. Se o usuário demonstra compra/preço/orçamento, qualifique antes: para quem, tema e melhor contato.
-7. Para crítica, ofensa ou tema delicado, notifique Alberto e responda com cuidado ou silencie.
-8. Seja curto, natural, brasileiro e profissional.
-9. Não invente preço.
-10. Não diga que é IA. Pode dizer "sou o assistente do Alberto".
+1. Regra de entrega direta por palavra-chave já foi processada antes de chegar aqui. Não precisa entregar link de ENTREGAS_JSON, exceto se for uma resposta contextual.
+2. Não trate "consultoria" como simples humano. Consultoria é lead comercial.
+3. "imersão", "imersao", "masterclass", "aula", "curso", "treinamento" e "capacitação" são lead de treinamento/imersão.
+4. Se o estado atual já estiver aguardando uma resposta, avance a conversa. NÃO repita a pergunta anterior.
+5. Se o estado pergunta "você/equipe/empresa" e o usuário responde "empresa", avance para perguntar o tema/objetivo.
+6. Se o usuário pergunta "ele dá consultoria?", responda que sim e pergunte se é para pessoa, equipe ou empresa.
+7. Se o usuário demonstra compra/preço/orçamento, qualifique antes: para quem, tema e melhor contato.
+8. Se o estado atual for PRODUTO_ENTREGUE e o usuário perguntar "qual é o conteúdo", "o que vem", "quais assuntos", "serve para quê", "tem o quê" ou algo parecido, use o produto salvo no estado e responda com base no BOT_FUNIL_JSON. Não pergunte novamente qual material é.
+9. Para crítica, ofensa ou tema delicado, notifique Alberto e responda com cuidado ou silencie.
+10. Seja curto, natural, brasileiro e profissional.
+11. Não invente preço.
+12. Não diga que é IA. Pode dizer "sou o assistente do Alberto".
 
 ESTADOS POSSÍVEIS:
+- PRODUTO_ENTREGUE
 - AGUARDANDO_ESCOPO_CONSULTORIA
 - AGUARDANDO_TEMA_CONSULTORIA
 - AGUARDANDO_CONTATO_CONSULTORIA
@@ -449,53 +499,6 @@ Responda APENAS em JSON válido, sem markdown, neste formato:
   "resumo_estado": "resumo curto para guardar no estado",
   "resumo_para_alberto": "resumo do lead ou alerta para Alberto",
   "confianca": 0.9
-}
-
-EXEMPLOS:
-Mensagem: "Quero saber se ele dá consultoria"
-Resposta:
-{
-  "intencao": "CONSULTORIA",
-  "acao": "RESPONDER",
-  "resposta": "Sim, o Alberto faz consultorias. 👋\\n\\nPara eu te direcionar melhor, essa consultoria seria para você, para sua equipe ou para sua empresa?",
-  "estado_novo": "AGUARDANDO_ESCOPO_CONSULTORIA",
-  "limpar_estado": false,
-  "notificar_alberto": true,
-  "motivo": "Lead perguntando sobre consultoria",
-  "resumo_estado": "Usuário quer saber sobre consultoria",
-  "resumo_para_alberto": "Lead perguntou se Alberto faz consultoria",
-  "confianca": 0.95
-}
-
-Estado atual: AGUARDANDO_ESCOPO_CONSULTORIA
-Mensagem: "empresa"
-Resposta:
-{
-  "intencao": "CONSULTORIA",
-  "acao": "RESPONDER",
-  "resposta": "Perfeito, consultoria para empresa. 👋\\n\\nQual é o principal objetivo agora?\\n\\n1. melhorar planilhas/processos\\n2. treinar equipe\\n3. usar IA no trabalho\\n4. automatizar atendimento/WhatsApp\\n5. organizar dados e dashboards\\n6. outro ponto",
-  "estado_novo": "AGUARDANDO_TEMA_CONSULTORIA",
-  "limpar_estado": false,
-  "notificar_alberto": true,
-  "motivo": "Usuário informou escopo empresa",
-  "resumo_estado": "Consultoria para empresa",
-  "resumo_para_alberto": "Lead de consultoria para empresa",
-  "confianca": 0.95
-}
-
-Mensagem: "IMERSÃO"
-Resposta:
-{
-  "intencao": "IMERSAO",
-  "acao": "RESPONDER",
-  "resposta": "Legal! 👋\\n\\nVocê quer uma imersão voltada para qual público?\\n\\n1. você\\n2. sua equipe\\n3. sua empresa",
-  "estado_novo": "AGUARDANDO_TIPO_TREINAMENTO",
-  "limpar_estado": false,
-  "notificar_alberto": true,
-  "motivo": "Interesse em imersão",
-  "resumo_estado": "Usuário demonstrou interesse em imersão",
-  "resumo_para_alberto": "Lead interessado em imersão",
-  "confianca": 0.95
 }
 `;
 
@@ -538,6 +541,25 @@ function normalizarDecisao(json) {
 }
 
 function decisaoFallbackSemIA(texto, estado) {
+  if (estado?.etapa === 'PRODUTO_ENTREGUE' && ehPerguntaSobreConteudo(normalizar(texto))) {
+    const resposta = respostaConteudoProduto(estado?.dados?.produto);
+
+    if (resposta) {
+      return {
+        intencao: 'MATERIAL',
+        acao: 'RESPONDER',
+        resposta,
+        estado_novo: 'PRODUTO_ENTREGUE',
+        limpar_estado: false,
+        notificar_alberto: true,
+        motivo: 'Fallback de conteúdo do produto entregue',
+        resumo_estado: estado?.dados?.resumo || '',
+        resumo_para_alberto: `Usuário perguntou conteúdo do produto ${estado?.dados?.produto || ''}`,
+        confianca: 0
+      };
+    }
+  }
+
   if (estado?.etapa) {
     return {
       intencao: 'HUMANO',
@@ -584,7 +606,7 @@ function extrairJson(texto) {
 
 // ================= FLUXO DE ENTREGA FIXA =================
 
-async function fluxoEntregaComentario(commentId, username, comentarioOriginal, entregas) {
+async function fluxoEntregaComentario(commentId, username, comentarioOriginal, entregas, senderId = null) {
   const entregasValidas = entregas.filter(e => e.link);
 
   if (entregasValidas.length === 0) {
@@ -592,8 +614,12 @@ async function fluxoEntregaComentario(commentId, username, comentarioOriginal, e
 
     await notificarAlberto(
       username,
-      comentarioOriginal,
-      `LINK NÃO CONFIGURADO: ${entregas.map(e => e.nome).join(', ')}`
+      `Mensagem:
+${comentarioOriginal}
+
+Entregas encontradas:
+${entregas.map(e => e.nome).join(', ')}`,
+      'LINK NÃO CONFIGURADO'
     );
 
     if (RESPONDER_PUBLICO) {
@@ -609,16 +635,21 @@ async function fluxoEntregaComentario(commentId, username, comentarioOriginal, e
     try {
       await enviarPrivateReply(commentId, montarMensagemEntrega(entregasValidas));
       dmEnviada = true;
+
+      if (senderId && entregasValidas.length === 1) {
+        guardarEstadoProdutoEntregue(senderId, entregasValidas[0], comentarioOriginal);
+      }
+
       console.log(`✅ Entrega enviada para @${username}: ${entregasValidas.map(e => e.nome).join(', ')}`);
     } catch (error) {
       console.error(`❌ Erro ao enviar entrega para @${username}:`, error.message);
-      await notificarAlberto(username, comentarioOriginal, `ERRO AO ENVIAR ENTREGA: ${error.message}`);
+      await notificarAlberto(username, `Mensagem:\n${comentarioOriginal}`, `ERRO AO ENVIAR ENTREGA: ${error.message}`);
     }
   }
 
   if (RESPONDER_PUBLICO) {
     const mensagemPublica = dmEnviada
-      ? `@${username} ${mensagemComentarioEntrega(entregasValidas)}`
+      ? montarRespostaPublicaEntrega(username, entregasValidas)
       : `@${username} me chama no direct que eu te envio 📩`;
 
     await responderComentarioSeguro(commentId, mensagemPublica);
@@ -793,6 +824,79 @@ Estado novo:
 ${decisao?.estado_novo || 'nenhum'}`;
 }
 
+// ================= PRODUTO / FUNIL =================
+
+function ehPerguntaSobreConteudo(textoNormalizado) {
+  const termos = [
+    'QUAL E O CONTEUDO',
+    'QUAL É O CONTEUDO',
+    'QUAL É O CONTEÚDO',
+    'CONTEUDO',
+    'CONTEÚDO',
+    'O QUE VEM',
+    'O QUE TEM',
+    'QUAIS ASSUNTOS',
+    'ASSUNTOS',
+    'TOPICOS',
+    'TÓPICOS',
+    'EMENTA',
+    'ABORDA',
+    'SERVE PARA QUE',
+    'DETALHES DO MATERIAL',
+    'SOBRE O QUE'
+  ];
+
+  return termos.some(termo => textoNormalizado.includes(normalizar(termo)));
+}
+
+function respostaConteudoProduto(produtoNome) {
+  if (!produtoNome || !BOT_FUNIL) return null;
+
+  const produtoNormalizado = normalizar(produtoNome);
+
+  const candidatos = [];
+
+  if (BOT_FUNIL.produtos && typeof BOT_FUNIL.produtos === 'object') {
+    for (const [chave, valor] of Object.entries(BOT_FUNIL.produtos)) {
+      candidatos.push({ chave, valor });
+    }
+  }
+
+  for (const [chave, valor] of Object.entries(BOT_FUNIL)) {
+    if (chave !== 'produtos' && valor && typeof valor === 'object') {
+      candidatos.push({ chave, valor });
+    }
+  }
+
+  for (const candidato of candidatos) {
+    const chaveNormalizada = normalizar(candidato.chave);
+    const nomeNormalizado = normalizar(candidato.valor?.nome || '');
+
+    const bate =
+      chaveNormalizada === produtoNormalizado ||
+      nomeNormalizado === produtoNormalizado ||
+      chaveNormalizada.includes(produtoNormalizado) ||
+      produtoNormalizado.includes(chaveNormalizada) ||
+      nomeNormalizado.includes(produtoNormalizado) ||
+      produtoNormalizado.includes(nomeNormalizado);
+
+    if (!bate) continue;
+
+    const resposta =
+      candidato.valor?.resposta_conteudo ||
+      candidato.valor?.resposta_sugerida ||
+      candidato.valor?.conteudo ||
+      candidato.valor?.descricao ||
+      candidato.valor?.resposta;
+
+    if (resposta) {
+      return String(resposta).trim();
+    }
+  }
+
+  return null;
+}
+
 // ================= ENTREGAS E MENSAGENS =================
 
 function encontrarEntregas(textoNormalizado) {
@@ -831,9 +935,16 @@ function montarMensagemEntrega(entregas) {
     const entrega = entregas[0];
     const titulo = entrega.tituloDm || entrega.nome || 'material';
 
+    if (entrega.mensagemDm) {
+      return String(entrega.mensagemDm)
+        .replaceAll('{link}', entrega.link)
+        .replaceAll('{nome}', entrega.nome)
+        .replaceAll('{tituloDm}', titulo);
+    }
+
     return `Oi! 👋
 
-Aqui está o link do ${titulo}:
+Aqui está o link para acessar ${titulo}:
 
 ${entrega.link}
 
@@ -859,12 +970,19 @@ Qualquer dúvida, é só responder este chat.
 — @albertobri7o`;
 }
 
-function mensagemComentarioEntrega(entregas) {
+function montarRespostaPublicaEntrega(username, entregas) {
   if (entregas.length === 1) {
-    return entregas[0].comentario || 'te mandei no direct! 📩';
+    const entrega = entregas[0];
+    const comentario = entrega.comentario || 'te mandei no direct! 📩';
+
+    if (entrega.usarArroba === false) {
+      return comentario;
+    }
+
+    return `@${username} ${comentario}`;
   }
 
-  return 'te mandei os links no direct! 📩';
+  return `@${username} te mandei os links no direct! 📩`;
 }
 
 function montarMensagemEscolherMaterial() {
@@ -888,7 +1006,7 @@ function montarMensagemFallbackDirect() {
 
 Para eu te ajudar melhor, me diga rapidamente o que você procura:
 
-• material gratuito
+• material
 • consultoria
 • treinamento
 • imersão
@@ -899,6 +1017,17 @@ Para eu te ajudar melhor, me diga rapidamente o que você procura:
 
 // ================= ESTADO =================
 
+function guardarEstadoProdutoEntregue(senderId, entrega, origemTexto) {
+  setEstadoDirect(senderId, 'PRODUTO_ENTREGUE', {
+    produto: entrega.nome,
+    tituloDm: entrega.tituloDm,
+    link: entrega.link,
+    tipo: entrega.tipo,
+    ultimoTexto: origemTexto,
+    resumo: `Usuário recebeu o produto ${entrega.nome}`
+  });
+}
+
 function setEstadoDirect(senderId, etapa, dados = {}) {
   estadosDirect.set(String(senderId), {
     etapa,
@@ -907,6 +1036,23 @@ function setEstadoDirect(senderId, etapa, dados = {}) {
   });
 
   console.log(`🧭 Estado do Direct atualizado para ${senderId}: ${etapa}`);
+}
+
+function atualizarEstadoDirect(senderId, novosDados = {}) {
+  const estado = getEstadoDirect(senderId);
+
+  if (!estado) return;
+
+  estadosDirect.set(String(senderId), {
+    ...estado,
+    dados: {
+      ...(estado.dados || {}),
+      ...novosDados
+    },
+    atualizadoEm: Date.now()
+  });
+
+  console.log(`🧭 Estado do Direct atualizado com novos dados para ${senderId}`);
 }
 
 function getEstadoDirect(senderId) {
@@ -955,12 +1101,25 @@ function carregarEntregas() {
         link: String(item.link || '').trim(),
         tipo: String(item.tipo || '').trim(),
         comentario: String(item.comentario || 'te mandei no direct! 📩').trim(),
-        tituloDm: String(item.tituloDm || item.nome || 'material').trim()
+        tituloDm: String(item.tituloDm || item.nome || 'material').trim(),
+        mensagemDm: item.mensagemDm ? String(item.mensagemDm) : '',
+        usarArroba: item.usarArroba === false ? false : true
       }))
       .filter(item => item.nome && item.palavras.length > 0);
   } catch (error) {
     console.error('❌ Erro ao ler ENTREGAS_JSON:', error.message);
     return [];
+  }
+}
+
+function carregarBotFunil(raw) {
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error('❌ Erro ao ler BOT_FUNIL_JSON:', error.message);
+    return null;
   }
 }
 
@@ -1080,6 +1239,10 @@ function validarVariaveis() {
     console.warn('⚠️ OPENAI_API_KEY ausente. IA ficará desativada.');
   }
 
+  if (!BOT_FUNIL) {
+    console.warn('⚠️ BOT_FUNIL_JSON ausente ou inválido. Perguntas de conteúdo dependerão só da IA.');
+  }
+
   if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) {
     console.warn('⚠️ Telegram não configurado. Alberto não será notificado.');
   }
@@ -1104,4 +1267,5 @@ app.listen(PORT, () => {
 
   console.log(`💬 RESPONDER_DIRECT: ${RESPONDER_DIRECT ? '✅' : '❌'}`);
   console.log(`🧠 IA roteadora: ${OPENAI_API_KEY ? '✅' : '❌'}`);
+  console.log(`🗂️ BOT_FUNIL_JSON: ${BOT_FUNIL ? '✅' : '❌'}`);
 });
