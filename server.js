@@ -241,6 +241,24 @@ async function processarMensagemDirect(event) {
   console.log(`📩 DM recebida de ${senderId}: "${text}"`);
   console.log('🧭 Estado atual do Direct:', estado ? JSON.stringify(estado) : 'SEM_ESTADO');
 
+  // 0. Se a pessoa veio de um anúncio, tenta entregar o produto certo direto.
+  //    Só funciona se a Meta enviar o referral no webhook (depende da config do anúncio).
+  const referralTexto = extrairTextoReferral(event);
+  if (referralTexto) {
+    const entregasAnuncio = encontrarEntregas(normalizar(referralTexto)).filter(e => e.link);
+    if (entregasAnuncio.length === 1) {
+      console.log(`📢 Origem de anúncio reconhecida: "${referralTexto}" → ${entregasAnuncio[0].nome}`);
+      await enviarMensagemDirect(senderId, montarMensagemEntrega(entregasAnuncio));
+      guardarEstadoProdutoEntregue(senderId, entregasAnuncio[0], text);
+      await notificarAlberto(
+        usuarioDirect,
+        `Veio do anúncio: ${referralTexto}\nMensagem: ${text}`,
+        'DM — ENTREGA POR ANÚNCIO'
+      );
+      return;
+    }
+  }
+
   // 1. Se o usuário recebeu um produto e perguntou sobre conteúdo,
   // responde de forma determinística usando BOT_FUNIL_JSON.
   if (estado?.etapa === 'PRODUTO_ENTREGUE' && ehPerguntaSobreConteudo(textoNormalizado)) {
@@ -469,8 +487,15 @@ REGRAS IMPORTANTES:
 8. Se o estado atual for PRODUTO_ENTREGUE e o usuário perguntar "qual é o conteúdo", "o que vem", "quais assuntos", "serve para quê", "tem o quê" ou algo parecido, use o produto salvo no estado e responda com base no BOT_FUNIL_JSON. Não pergunte novamente qual material é.
 9. Para crítica, ofensa ou tema delicado, notifique Alberto e responda com cuidado ou silencie.
 10. Seja curto, natural, brasileiro e profissional.
-11. Não invente preço.
+11. Não invente preço. Use somente os preços do CONTEXTO DO NEGÓCIO.
 12. Não diga que é IA. Pode dizer "sou o assistente do Alberto".
+13. Se a pessoa perguntar preço/valor SEM dizer o tema (ex.: "qual o preço?"), NÃO faça
+    pergunta seca. Liste TODOS os materiais com seus preços (conforme o CONTEXTO DO NEGÓCIO),
+    numa única mensagem, e peça que ela responda com o nome do material desejado.
+14. Para temas SEM material pronto (IA, Power BI, automação, produtividade, dados): confirme
+    que o Alberto trabalha com o tema e direcione ao WhatsApp (82) 98186-8684. NUNCA envie
+    link de pagamento nesses casos. NUNCA chame um link de algo que ele não é.
+15. Envie SEMPRE uma única mensagem por resposta. Não repita a mesma pergunta.
 
 ESTADOS POSSÍVEIS:
 - PRODUTO_ENTREGUE
@@ -1122,6 +1147,21 @@ function carregarEntregas() {
     console.error('❌ Erro ao ler ENTREGAS_JSON:', error.message);
     return [];
   }
+}
+
+function extrairTextoReferral(event) {
+  // A Meta pode enviar a origem do anúncio em locais diferentes do evento.
+  const ref =
+    event?.referral ||
+    event?.message?.referral ||
+    event?.postback?.referral ||
+    null;
+
+  if (!ref) return '';
+
+  const ctx = ref.ads_context_data || {};
+  // Junta os campos de texto que podem conter o nome do produto anunciado.
+  return [ref.ref, ctx.ad_title, ctx.title].filter(Boolean).join(' ');
 }
 
 function carregarBotFunil(raw) {
