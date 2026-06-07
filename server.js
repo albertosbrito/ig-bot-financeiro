@@ -42,9 +42,7 @@ const RESPONDER_DIRECT = boolEnv('RESPONDER_DIRECT', true);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
-const BOT_NEGOCIO_CONTEXT =
-  process.env.BOT_NEGOCIO_CONTEXT ||
-  `Alberto Brito, @albertobri7o, vende conteúdos digitais (eBooks e apostilas prontas) e também presta consultorias, treinamentos e imersões sobre Excel, Word, IA, automação, produtividade, Power BI e dados. PADRÃO: venda de material. Se a pessoa demonstra interesse, pede informações, preço ou link, trate como venda de produto: NÃO faça questionário de consultoria, NÃO pergunte "é para você, equipe ou empresa", apenas ajude a escolher o material e envie preço e link. EXCEÇÃO: consultoria/treinamento só quando a pessoa fala explicitamente em empresa, equipe, treinar um time, capacitar funcionários, orçamento corporativo, contratar para um negócio, mentoria ou projeto sob medida — nesse caso qualifique (para quem, tema, objetivo, contato) e encaminhe ao WhatsApp (82) 98186-8684. Na dúvida, é venda de material. Mensagem vaga ("tenho interesse", "queria informações") sem tema: liste os materiais com preços e peça que a pessoa responda qual quer. Responda em português do Brasil, curto e caloroso, no máximo 1 emoji, sempre em uma única mensagem.`;
+const BOT_NEGOCIO_CONTEXT = String(process.env.BOT_NEGOCIO_CONTEXT || '').trim();
 
 const BOT_FUNIL_JSON_RAW = process.env.BOT_FUNIL_JSON || '';
 const BOT_FUNIL = carregarBotFunil(BOT_FUNIL_JSON_RAW);
@@ -1298,6 +1296,10 @@ function validarVariaveis() {
 
   if (!OPENAI_API_KEY) {
     console.warn('⚠️ OPENAI_API_KEY ausente. IA ficará desativada.');
+  }
+
+  if (!BOT_NEGOCIO_CONTEXT) {
+    console.warn('⚠️ BOT_NEGOCIO_CONTEXT ausente no Railway. O prompt da IA ficará sem contexto comercial.');
   }
 
   if (!BOT_FUNIL) {
