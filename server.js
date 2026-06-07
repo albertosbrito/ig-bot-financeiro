@@ -101,6 +101,10 @@ app.post('/webhook', async (req, res) => {
   try {
     const body = req.body;
 
+    // 🔎 INVESTIGAÇÃO DE ANÚNCIO: log do payload bruto da Meta. O referral pode chegar
+    //    em um evento separado dentro de entry.messaging. Remover após diagnosticar.
+    console.log('🔎 WEBHOOK BRUTO >>>', JSON.stringify(body));
+
     if (!['instagram', 'page'].includes(body.object)) {
       console.log(`Evento ignorado: object=${body.object}`);
       return;
@@ -240,6 +244,11 @@ async function processarMensagemDirect(event) {
 
   console.log(`📩 DM recebida de ${senderId}: "${text}"`);
   console.log('🧭 Estado atual do Direct:', estado ? JSON.stringify(estado) : 'SEM_ESTADO');
+
+  // 🔎 INVESTIGAÇÃO DE ANÚNCIO: despeja o evento completo da Meta para descobrir
+  //    onde (e se) o referral do anúncio chega. Procure no log por "concurso", "ad",
+  //    "referral" ou "ads_context_data". Remover depois de diagnosticar.
+  console.log('🔎 EVENTO COMPLETO DA META >>>', JSON.stringify(event));
 
   // 0. Se a pessoa veio de um anúncio, tenta entregar o produto certo direto.
   //    Só funciona se a Meta enviar o referral no webhook (depende da config do anúncio).
