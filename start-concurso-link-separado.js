@@ -66,7 +66,6 @@ patch(
   }
 
   if (ehConcurso(textoNormalizado)) {
-    const sender = fromId || \`comment_\${commentId}\`;
     const resposta = perguntaConcurso(0, true);
     if (ENVIAR_PRIVATE_REPLY) await enviarPrivateReply(commentId, resposta);
     if (RESPONDER_PUBLICO) await responderComentarioSeguro(commentId, \`@\${username} te mandei no direct 📩\`);
@@ -136,7 +135,15 @@ function mensagemAmostraConcurso() {
   return \`Claro. Separei uma amostra gratuita da apostila Informática para Concurso para você ver o estilo do material antes de comprar.\n\nEla mostra resumo, pegadinhas e questões comentadas.\n\nBaixe aqui 👇\n\${AMOSTRA_CONCURSO_URL}\n\nSe fizer sentido para você, depois eu te mando o acesso completo.\`;
 }
 function perguntaConcurso(i, intro = false) {
-  const p = 'Você está estudando para qual situação?\n\n1. Concurso público\n2. Processo seletivo\n3. Prova próxima\n4. Revisão geral\n5. Ainda estou começando';
+  const p = [
+    'Você está estudando para qual situação?',
+    '',
+    '1. Concurso público',
+    '2. Processo seletivo',
+    '3. Prova próxima',
+    '4. Revisão geral',
+    '5. Ainda estou começando'
+  ].join('\\n');
   return intro ? \`Perfeito. Vou te ajudar a revisar Informática do jeito que cai em concurso. Antes de te mandar o acesso, responde rapidinho:\n\nMas antes, vamos combinar um atalho:\n\nResponda apenas com o número da alternativa que escolher.\n\n\${p}\` : p;
 }
 
