@@ -118,7 +118,7 @@ function mensagemCompraWord() {
 }
 function ehPerguntaPreco(t) {
   const texto = String(t || '');
-  return texto.includes('QUAL E O PRECO') || texto.includes('QUAL O PRECO') || texto.includes('VALOR') || texto.includes('QUANTO CUSTA') || texto.includes('POR QUANTO') || texto.includes('ESTA POR QUANTO') || texto.includes('TA POR QUANTO') || texto.includes('SAI POR QUANTO') || texto.includes('QUANTO SAI') || texto.includes('QUANTO TA') || texto.includes('QUANTO ESTA') || texto.includes('PRECO') || texto.includes('PREÇO');
+  return texto === 'QUANTO' || texto.includes('QUAL E O PRECO') || texto.includes('QUAL O PRECO') || texto.includes('VALOR') || texto.includes('QUANTO CUSTA') || texto.includes('POR QUANTO') || texto.includes('ESTA POR QUANTO') || texto.includes('TA POR QUANTO') || texto.includes('SAI POR QUANTO') || texto.includes('QUANTO SAI') || texto.includes('QUANTO TA') || texto.includes('QUANTO ESTA') || texto.includes('PRECO') || texto.includes('PREÇO');
 }
 function mensagemPrecoConcurso() {
   return \`Claro. A Apostila Informática para Concurso está por R$ 47.\n\nEla inclui teoria objetiva, pegadinhas, questões comentadas, itens estilo Cebraspe e simulado final com gabarito.\n\nPara acessar, use este link 👇\n\${CHECKOUT_CONCURSO_URL}\n\nO acesso é imediato após a confirmação do pagamento.\`;
