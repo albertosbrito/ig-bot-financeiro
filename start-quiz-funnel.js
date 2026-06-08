@@ -24,7 +24,8 @@ const QUIZ_FUNNEL_BASE_URL = String(
   process.env.QUIZ_FUNNEL_BASE_URL || 'https://ab-concurso-quiz-funnel-production.up.railway.app'
 ).replace(/\\/$/, '');
 const QUIZ_FUNNEL_KEYWORD = normalizar(process.env.QUIZ_FUNNEL_KEYWORD || 'CONCURSO');
-const QUIZ_FUNNEL_ATIVO = boolEnv('QUIZ_FUNNEL_ATIVO', true);`,
+// Ativo por padrão. Só desliga se a variável for exatamente false.
+const QUIZ_FUNNEL_ATIVO = String(process.env.QUIZ_FUNNEL_ATIVO || 'true').toLowerCase() !== 'false';`,
   'config quiz funnel'
 );
 
@@ -39,10 +40,8 @@ const ENTREGAS = carregarEntregas().filter(entrega => {
   const nome = normalizar(entrega.nome || '');
   const titulo = normalizar(entrega.tituloDm || '');
 
-  const ehEntregaConcurso =
-    nome.includes('CONCURSO') ||
-    titulo.includes('CONCURSO') ||
-    palavras.includes('CONCURSO');
+  const textoEntrega = [nome, titulo, ...palavras].join(' ');
+  const ehEntregaConcurso = textoEntrega.includes('CONCURSO');
 
   if (QUIZ_FUNNEL_ATIVO && ehEntregaConcurso) {
     console.log('🧪 Entrega fixa CONCURSO removida para priorizar Quiz Funnel.');
@@ -97,7 +96,19 @@ replaceOnce(
       return;
     } catch (error) {
       console.error('❌ Erro no Quiz Funnel CONCURSO via comentário:', error.message);
+
+      const fallbackQuiz = mensagemInicialQuizConcurso();
+
+      if (ENVIAR_PRIVATE_REPLY) {
+        await enviarPrivateReply(commentId, fallbackQuiz);
+      }
+
+      if (RESPONDER_PUBLICO) {
+        await responderComentarioSeguro(commentId, \`@\${username} te mandei no direct 📩\`);
+      }
+
       await notificarAlberto(username, \`Comentário:\n\${text}\`, \`ERRO QUIZ FUNNEL CONCURSO: \${error.message}\`);
+      return;
     }
   }
 
@@ -141,7 +152,18 @@ replaceOnce(
       return;
     } catch (error) {
       console.error('❌ Erro no Quiz Funnel CONCURSO via Direct:', error.message);
+
+      const fallbackQuiz = mensagemInicialQuizConcurso();
+      await enviarMensagemDirect(senderId, fallbackQuiz);
+      setEstadoDirect(senderId, 'QUIZ_FUNNEL_CONCURSO', {
+        origem: 'fallback_local',
+        ultimoTexto: text,
+        currentStepId: 'situacao',
+        resumo: 'Lead em quiz funnel da apostila de Informática para Concursos'
+      });
+
       await notificarAlberto(usuarioDirect, \`Mensagem:\n\${text}\`, \`ERRO QUIZ FUNNEL CONCURSO: \${error.message}\`);
+      return;
     }
   }
 
@@ -155,7 +177,23 @@ replaceOnce(
 
 function ehGatilhoQuizConcurso(textoNormalizado) {
   if (!textoNormalizado || !QUIZ_FUNNEL_KEYWORD) return false;
-  return textoNormalizado === QUIZ_FUNNEL_KEYWORD || contemPalavraOuFrase(textoNormalizado, QUIZ_FUNNEL_KEYWORD);
+
+  const keyword = normalizar(QUIZ_FUNNEL_KEYWORD);
+  const texto = String(textoNormalizado || '');
+
+  return texto === keyword || texto.includes(keyword);
+}
+
+function mensagemInicialQuizConcurso() {
+  return \`Perfeito. Vou te ajudar a revisar Informática do jeito que cai em concurso. Antes de te mandar o acesso, responde rapidinho:
+
+Você está estudando para qual situação?
+
+1. Concurso público
+2. Processo seletivo
+3. Prova próxima
+4. Revisão geral
+5. Ainda estou começando\`;
 }
 
 async function chamarQuizFunnel(pathname, payload) {
