@@ -29,6 +29,32 @@ const QUIZ_FUNNEL_ATIVO = boolEnv('QUIZ_FUNNEL_ATIVO', true);`,
 );
 
 replaceOnce(
+  `// ================= ENTREGAS =================
+
+const ENTREGAS = carregarEntregas();`,
+  `// ================= ENTREGAS =================
+
+const ENTREGAS = carregarEntregas().filter(entrega => {
+  const palavras = Array.isArray(entrega.palavras) ? entrega.palavras.map(p => normalizar(p)) : [];
+  const nome = normalizar(entrega.nome || '');
+  const titulo = normalizar(entrega.tituloDm || '');
+
+  const ehEntregaConcurso =
+    nome.includes('CONCURSO') ||
+    titulo.includes('CONCURSO') ||
+    palavras.includes('CONCURSO');
+
+  if (QUIZ_FUNNEL_ATIVO && ehEntregaConcurso) {
+    console.log('🧪 Entrega fixa CONCURSO removida para priorizar Quiz Funnel.');
+    return false;
+  }
+
+  return true;
+});`,
+  'filtra entrega concurso'
+);
+
+replaceOnce(
   `  // Regra fixa única: entrega por ENTREGAS_JSON.
   const entregasEncontradas = encontrarEntregas(textoNormalizado);
 
