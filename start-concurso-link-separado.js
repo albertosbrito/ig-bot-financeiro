@@ -18,7 +18,9 @@ replaceOnce(
   "const BOT_NEGOCIO_CONTEXT = String(process.env.BOT_NEGOCIO_CONTEXT || '').trim();",
   `const BOT_NEGOCIO_CONTEXT = String(process.env.BOT_NEGOCIO_CONTEXT || '').trim();
 const CHECKOUT_CONCURSO_URL = String(process.env.CHECKOUT_CONCURSO_URL || 'https://pay.kiwify.com.br/TfqsJLX').trim();
-const AMOSTRA_CONCURSO_URL = String(process.env.AMOSTRA_CONCURSO_URL || 'https://drive.google.com/file/d/1APNGWFN-lEzjDIvXYYaHI0nGpQg8cOo5/view?usp=drivesdk').trim();`,
+const AMOSTRA_CONCURSO_URL = String(process.env.AMOSTRA_CONCURSO_URL || 'https://drive.google.com/file/d/1APNGWFN-lEzjDIvXYYaHI0nGpQg8cOo5/view?usp=drivesdk').trim();
+const CHECKOUT_WORD_URL = String(process.env.CHECKOUT_WORD_URL || 'https://pay.kiwify.com.br/CKv3YRe').trim();
+const PRECO_WORD = String(process.env.PRECO_WORD || 'R$ 19,90').trim();`,
   'config concurso local'
 );
 
@@ -43,7 +45,15 @@ replaceOnce(
     await fluxoEntregaComentario(commentId, username, text, entregasEncontradas, fromId);
     return;
   }`,
-  `  if (ehPedidoAmostraConcurso(textoNormalizado) || ehInteresseConcurso(textoNormalizado)) {
+  `  if (ehWord(textoNormalizado)) {
+    const resposta = mensagemCompraWord();
+    if (ENVIAR_PRIVATE_REPLY) await enviarPrivateReply(commentId, resposta);
+    if (RESPONDER_PUBLICO) await responderComentarioSeguro(commentId, \`@\${username} te mandei o acesso da apostila de Word no direct 📩\`);
+    await notificarAlberto(username, \`Comentário:\n\${text}\`, 'COMENTÁRIO — COMPRA WORD');
+    return;
+  }
+
+  if (ehPedidoAmostraConcurso(textoNormalizado) || ehInteresseConcurso(textoNormalizado)) {
     const resposta = mensagemAmostraConcurso();
     if (ENVIAR_PRIVATE_REPLY) await enviarPrivateReply(commentId, resposta);
     if (RESPONDER_PUBLICO) await responderComentarioSeguro(commentId, \`@\${username} te mandei uma amostra no direct 📩\`);
@@ -86,6 +96,13 @@ replaceOnce(
   `  console.log(\`📩 DM recebida de \${senderId}: "\${text}"\`);
   console.log('🧭 Estado atual do Direct:', estado ? JSON.stringify(estado) : 'SEM_ESTADO');
 
+  if (ehWord(textoNormalizado)) {
+    clearEstadoDirect(senderId);
+    await enviarMensagemDirect(senderId, mensagemCompraWord());
+    await notificarAlberto(usuarioDirect, \`Mensagem:\n\${text}\`, 'DIRECT — COMPRA WORD');
+    return;
+  }
+
   if (ehPedidoAmostraConcurso(textoNormalizado) || ehInteresseConcurso(textoNormalizado)) {
     await enviarMensagemDirect(senderId, mensagemAmostraConcurso());
     await notificarAlberto(usuarioDirect, \`Mensagem:\n\${text}\`, 'DIRECT — AMOSTRA CONCURSO');
@@ -124,6 +141,27 @@ const QUIZ_CONCURSO = [
   ['Sua prova está próxima?', ['Sim, tenho pouco tempo', 'Tenho algumas semanas', 'Ainda não saiu a data', 'Estou estudando com calma', 'Quero deixar o material salvo']]
 ];
 function ehConcurso(t) { return String(t || '').includes('CONCURSO'); }
+function ehWord(t) {
+  const texto = String(t || '');
+  return (
+    texto === 'WORD' ||
+    texto.includes('APOSTILA WORD') ||
+    texto.includes('APOSTILA DE WORD') ||
+    texto.includes('MATERIAL WORD') ||
+    texto.includes('MATERIAL DE WORD') ||
+    texto.includes('CURSO WORD') ||
+    texto.includes('CURSO DE WORD') ||
+    texto.includes('COMPRAR WORD') ||
+    texto.includes('QUERO WORD') ||
+    texto.includes('QUERO APOSTILA WORD') ||
+    texto.includes('QUERO APOSTILA DE WORD') ||
+    texto.includes('LINK WORD') ||
+    texto.includes('CHECKOUT WORD')
+  );
+}
+function mensagemCompraWord() {
+  return \`Claro. A Apostila de Word está saindo por \${PRECO_WORD}.\n\nPara acessar, use este link 👇\n\${CHECKOUT_WORD_URL}\n\nO acesso é imediato após a confirmação do pagamento.\n\nSe não abrir ao tocar, copie e cole o link no navegador.\`;
+}
 function ehInteresseConcurso(t) {
   const texto = String(t || '');
   return (
