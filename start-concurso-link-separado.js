@@ -16,11 +16,18 @@ function patch(find, replacement, label) {
 
 patch(
   "const BOT_NEGOCIO_CONTEXT = String(process.env.BOT_NEGOCIO_CONTEXT || '').trim();",
-  `const BOT_NEGOCIO_CONTEXT = String(process.env.BOT_NEGOCIO_CONTEXT || '').trim();
+  `const PRECO_WORD = String(process.env.PRECO_WORD || 'R$ 19,90').trim();
+let BOT_NEGOCIO_CONTEXT = String(process.env.BOT_NEGOCIO_CONTEXT || '').trim();
+BOT_NEGOCIO_CONTEXT = BOT_NEGOCIO_CONTEXT
+  .replaceAll('Word — cortesia (grátis)', \`Word — \${PRECO_WORD}\`)
+  .replaceAll('Word - cortesia (grátis)', \`Word - \${PRECO_WORD}\`)
+  .replaceAll('Word: cortesia (grátis)', \`Word: \${PRECO_WORD}\`)
+  .replaceAll('Word — cortesia (gratis)', \`Word — \${PRECO_WORD}\`)
+  .replaceAll('Word - cortesia (gratis)', \`Word - \${PRECO_WORD}\`)
+  .replaceAll('Word: cortesia (gratis)', \`Word: \${PRECO_WORD}\`);
 const CHECKOUT_CONCURSO_URL = String(process.env.CHECKOUT_CONCURSO_URL || 'https://pay.kiwify.com.br/TfqsJLX').trim();
 const AMOSTRA_CONCURSO_URL = String(process.env.AMOSTRA_CONCURSO_URL || 'https://drive.google.com/file/d/1APNGWFN-lEzjDIvXYYaHI0nGpQg8cOo5/view?usp=drivesdk').trim();
-const CHECKOUT_WORD_URL = String(process.env.CHECKOUT_WORD_URL || 'https://pay.kiwify.com.br/CKv3YRe').trim();
-const PRECO_WORD = String(process.env.PRECO_WORD || 'R$ 19,90').trim();`,
+const CHECKOUT_WORD_URL = String(process.env.CHECKOUT_WORD_URL || 'https://pay.kiwify.com.br/CKv3YRe').trim();`,
   'config'
 );
 
@@ -118,7 +125,7 @@ function mensagemCompraWord() {
 }
 function ehPerguntaPreco(t) {
   const texto = String(t || '');
-  return texto === 'QUANTO' || texto.includes('QUAL E O PRECO') || texto.includes('QUAL O PRECO') || texto.includes('VALOR') || texto.includes('QUANTO CUSTA') || texto.includes('POR QUANTO') || texto.includes('ESTA POR QUANTO') || texto.includes('TA POR QUANTO') || texto.includes('SAI POR QUANTO') || texto.includes('QUANTO SAI') || texto.includes('QUANTO TA') || texto.includes('QUANTO ESTA') || texto.includes('PRECO') || texto.includes('PREÇO');
+  return texto.includes('QUANTO') || texto.includes('QUAL E O PRECO') || texto.includes('QUAL O PRECO') || texto.includes('VALOR') || texto.includes('QUANTO CUSTA') || texto.includes('POR QUANTO') || texto.includes('ESTA POR QUANTO') || texto.includes('TA POR QUANTO') || texto.includes('SAI POR QUANTO') || texto.includes('QUANTO SAI') || texto.includes('QUANTO TA') || texto.includes('QUANTO ESTA') || texto.includes('PRECO') || texto.includes('PREÇO');
 }
 function mensagemPrecoConcurso() {
   return \`Claro. A Apostila Informática para Concurso está por R$ 47.\n\nEla inclui teoria objetiva, pegadinhas, questões comentadas, itens estilo Cebraspe e simulado final com gabarito.\n\nPara acessar, use este link 👇\n\${CHECKOUT_CONCURSO_URL}\n\nO acesso é imediato após a confirmação do pagamento.\`;
