@@ -43,7 +43,7 @@ replaceOnce(
     await fluxoEntregaComentario(commentId, username, text, entregasEncontradas, fromId);
     return;
   }`,
-  `  if (ehPedidoAmostraConcurso(textoNormalizado)) {
+  `  if (ehPedidoAmostraConcurso(textoNormalizado) || ehInteresseConcurso(textoNormalizado)) {
     const resposta = mensagemAmostraConcurso();
     if (ENVIAR_PRIVATE_REPLY) await enviarPrivateReply(commentId, resposta);
     if (RESPONDER_PUBLICO) await responderComentarioSeguro(commentId, \`@\${username} te mandei uma amostra no direct 📩\`);
@@ -59,7 +59,7 @@ replaceOnce(
     return;
   }
 
-  if (ehConcurso(textoNormalizado) || ehInteresseConcurso(textoNormalizado)) {
+  if (ehConcurso(textoNormalizado)) {
     const sender = fromId || \`comment_\${commentId}\`;
     const resposta = quizConcurso(sender, text, true);
     if (ENVIAR_PRIVATE_REPLY) await enviarPrivateReply(commentId, Array.isArray(resposta) ? resposta[0] : resposta);
@@ -86,7 +86,7 @@ replaceOnce(
   `  console.log(\`📩 DM recebida de \${senderId}: "\${text}"\`);
   console.log('🧭 Estado atual do Direct:', estado ? JSON.stringify(estado) : 'SEM_ESTADO');
 
-  if (ehPedidoAmostraConcurso(textoNormalizado)) {
+  if (ehPedidoAmostraConcurso(textoNormalizado) || ehInteresseConcurso(textoNormalizado)) {
     await enviarMensagemDirect(senderId, mensagemAmostraConcurso());
     await notificarAlberto(usuarioDirect, \`Mensagem:\n\${text}\`, 'DIRECT — AMOSTRA CONCURSO');
     return;
@@ -99,7 +99,7 @@ replaceOnce(
     return;
   }
 
-  if (estado?.etapa === 'QUIZ_CONCURSO_LOCAL' || ehConcurso(textoNormalizado) || ehInteresseConcurso(textoNormalizado)) {
+  if (estado?.etapa === 'QUIZ_CONCURSO_LOCAL' || ehConcurso(textoNormalizado)) {
     const resposta = quizConcurso(senderId, text, estado?.etapa !== 'QUIZ_CONCURSO_LOCAL');
     const mensagens = Array.isArray(resposta) ? resposta : [resposta];
     for (const mensagem of mensagens) {
