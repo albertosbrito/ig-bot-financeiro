@@ -98,7 +98,7 @@ function perguntaConcurso(i, intro=false) {
   const s = QUIZ_CONCURSO[i];
   const op = s[1].map((x, n) => \`\${n + 1}. \${x}\`).join('\\n');
   const p = \`\${s[0]}\\n\\n\${op}\`;
-  return intro ? \`Perfeito. Vou te ajudar a revisar Informática do jeito que cai em concurso. Antes de te mandar o acesso, responde rapidinho:\\n\\n\${p}\` : p;
+  return intro ? \`Perfeito. Vou te ajudar a revisar Informática do jeito que cai em concurso. Antes de te mandar o acesso, responde rapidinho:\\n\\nMas antes, vamos combinar um atalho:\\n\\nResponda apenas com o número da alternativa que escolher.\\n\\n\${p}\` : p;
 }
 function respostaOpcao(text, opts) {
   const n = Number(String(text || '').trim());
