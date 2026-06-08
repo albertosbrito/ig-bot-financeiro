@@ -17,7 +17,8 @@ function replaceOnce(target, replacement, label) {
 replaceOnce(
   "const BOT_NEGOCIO_CONTEXT = String(process.env.BOT_NEGOCIO_CONTEXT || '').trim();",
   `const BOT_NEGOCIO_CONTEXT = String(process.env.BOT_NEGOCIO_CONTEXT || '').trim();
-const CHECKOUT_CONCURSO_URL = String(process.env.CHECKOUT_CONCURSO_URL || 'https://pay.kiwify.com.br/TfqsJLX').trim();`,
+const CHECKOUT_CONCURSO_URL = String(process.env.CHECKOUT_CONCURSO_URL || 'https://pay.kiwify.com.br/TfqsJLX').trim();
+const AMOSTRA_CONCURSO_URL = String(process.env.AMOSTRA_CONCURSO_URL || 'https://ab-concurso-quiz-funnel-production.up.railway.app/amostra/informatica-concurso.pdf').trim();`,
   'config concurso local'
 );
 
@@ -42,7 +43,15 @@ replaceOnce(
     await fluxoEntregaComentario(commentId, username, text, entregasEncontradas, fromId);
     return;
   }`,
-  `  if (ehCompraDiretaConcurso(textoNormalizado)) {
+  `  if (ehPedidoAmostraConcurso(textoNormalizado)) {
+    const resposta = mensagemAmostraConcurso();
+    if (ENVIAR_PRIVATE_REPLY) await enviarPrivateReply(commentId, resposta);
+    if (RESPONDER_PUBLICO) await responderComentarioSeguro(commentId, \`@\${username} te mandei uma amostra no direct 📩\`);
+    await notificarAlberto(username, \`Comentário:\n\${text}\`, 'COMENTÁRIO — AMOSTRA CONCURSO');
+    return;
+  }
+
+  if (ehCompraDiretaConcurso(textoNormalizado)) {
     const resposta = mensagemCompraDiretaConcurso();
     if (ENVIAR_PRIVATE_REPLY) await enviarPrivateReply(commentId, resposta);
     if (RESPONDER_PUBLICO) await responderComentarioSeguro(commentId, \`@\${username} te mandei o acesso no direct 📩\`);
@@ -77,6 +86,12 @@ replaceOnce(
   `  console.log(\`📩 DM recebida de \${senderId}: "\${text}"\`);
   console.log('🧭 Estado atual do Direct:', estado ? JSON.stringify(estado) : 'SEM_ESTADO');
 
+  if (ehPedidoAmostraConcurso(textoNormalizado)) {
+    await enviarMensagemDirect(senderId, mensagemAmostraConcurso());
+    await notificarAlberto(usuarioDirect, \`Mensagem:\n\${text}\`, 'DIRECT — AMOSTRA CONCURSO');
+    return;
+  }
+
   if (ehCompraDiretaConcurso(textoNormalizado)) {
     clearEstadoDirect(senderId);
     await enviarMensagemDirect(senderId, mensagemCompraDiretaConcurso());
@@ -109,6 +124,25 @@ const QUIZ_CONCURSO = [
   ['Sua prova está próxima?', ['Sim, tenho pouco tempo', 'Tenho algumas semanas', 'Ainda não saiu a data', 'Estou estudando com calma', 'Quero deixar o material salvo']]
 ];
 function ehConcurso(t) { return String(t || '').includes('CONCURSO'); }
+function ehPedidoAmostraConcurso(t) {
+  const texto = String(t || '');
+  return (
+    texto.includes('AMOSTRA') ||
+    texto.includes('DEGUSTACAO') ||
+    texto.includes('DEGUSTAÇÃO') ||
+    texto.includes('EXEMPLO DO MATERIAL') ||
+    texto.includes('VER POR DENTRO') ||
+    texto.includes('POSSO VER') ||
+    texto.includes('QUERO VER') ||
+    texto.includes('ANTES DE COMPRAR') ||
+    texto.includes('TEM UMA PREVIA') ||
+    texto.includes('PREVIA') ||
+    texto.includes('PDF DE AMOSTRA')
+  );
+}
+function mensagemAmostraConcurso() {
+  return \`Claro. Separei uma amostra gratuita da apostila Informática para Concurso para você ver o estilo do material antes de comprar.\n\nEla mostra resumo, pegadinhas e questões comentadas.\n\nBaixe aqui 👇\n\${AMOSTRA_CONCURSO_URL}\n\nSe fizer sentido para você, depois eu te mando o acesso completo.\`;
+}
 function ehCompraDiretaConcurso(t) {
   const texto = String(t || '');
   return (
@@ -122,7 +156,7 @@ function ehCompraDiretaConcurso(t) {
   );
 }
 function mensagemCompraDiretaConcurso() {
-  return \`Claro. Para comprar a apostila Informática para Concurso, acesse aqui 👇\\n\${CHECKOUT_CONCURSO_URL}\\n\\nO acesso é imediato após a confirmação do pagamento.\\n\\nSe não abrir ao tocar, copie e cole o link no navegador.\`;
+  return \`Claro. Para comprar a apostila Informática para Concurso, acesse aqui 👇\n\${CHECKOUT_CONCURSO_URL}\n\nO acesso é imediato após a confirmação do pagamento.\n\nSe não abrir ao tocar, copie e cole o link no navegador.\`;
 }
 function perguntaConcurso(i, intro=false) {
   const s = QUIZ_CONCURSO[i];
