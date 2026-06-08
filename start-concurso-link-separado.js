@@ -42,7 +42,15 @@ replaceOnce(
     await fluxoEntregaComentario(commentId, username, text, entregasEncontradas, fromId);
     return;
   }`,
-  `  if (ehConcurso(textoNormalizado)) {
+  `  if (ehCompraDiretaConcurso(textoNormalizado)) {
+    const resposta = mensagemCompraDiretaConcurso();
+    if (ENVIAR_PRIVATE_REPLY) await enviarPrivateReply(commentId, resposta);
+    if (RESPONDER_PUBLICO) await responderComentarioSeguro(commentId, \`@\${username} te mandei o acesso no direct 📩\`);
+    await notificarAlberto(username, \`Comentário:\n\${text}\`, 'COMENTÁRIO — COMPRA DIRETA CONCURSO');
+    return;
+  }
+
+  if (ehConcurso(textoNormalizado)) {
     const sender = fromId || \`comment_\${commentId}\`;
     const resposta = quizConcurso(sender, text, true);
     if (ENVIAR_PRIVATE_REPLY) await enviarPrivateReply(commentId, Array.isArray(resposta) ? resposta[0] : resposta);
@@ -69,6 +77,13 @@ replaceOnce(
   `  console.log(\`📩 DM recebida de \${senderId}: "\${text}"\`);
   console.log('🧭 Estado atual do Direct:', estado ? JSON.stringify(estado) : 'SEM_ESTADO');
 
+  if (ehCompraDiretaConcurso(textoNormalizado)) {
+    clearEstadoDirect(senderId);
+    await enviarMensagemDirect(senderId, mensagemCompraDiretaConcurso());
+    await notificarAlberto(usuarioDirect, \`Mensagem:\n\${text}\`, 'DIRECT — COMPRA DIRETA CONCURSO');
+    return;
+  }
+
   if (estado?.etapa === 'QUIZ_CONCURSO_LOCAL' || ehConcurso(textoNormalizado)) {
     const resposta = quizConcurso(senderId, text, estado?.etapa !== 'QUIZ_CONCURSO_LOCAL');
     const mensagens = Array.isArray(resposta) ? resposta : [resposta];
@@ -94,6 +109,21 @@ const QUIZ_CONCURSO = [
   ['Sua prova está próxima?', ['Sim, tenho pouco tempo', 'Tenho algumas semanas', 'Ainda não saiu a data', 'Estou estudando com calma', 'Quero deixar o material salvo']]
 ];
 function ehConcurso(t) { return String(t || '').includes('CONCURSO'); }
+function ehCompraDiretaConcurso(t) {
+  const texto = String(t || '');
+  return (
+    texto.includes('COMO FACO PARA COMPRAR') ||
+    texto.includes('COMO COMPRAR') ||
+    texto.includes('QUERO COMPRAR') ||
+    texto.includes('LINK DE COMPRA') ||
+    texto.includes('FINALIZAR COMPRA') ||
+    texto.includes('CHECKOUT') ||
+    texto === 'COMPRAR'
+  );
+}
+function mensagemCompraDiretaConcurso() {
+  return \`Claro. Para comprar a apostila Informática para Concurso, acesse aqui 👇\\n\${CHECKOUT_CONCURSO_URL}\\n\\nO acesso é imediato após a confirmação do pagamento.\\n\\nSe não abrir ao tocar, copie e cole o link no navegador.\`;
+}
 function perguntaConcurso(i, intro=false) {
   const s = QUIZ_CONCURSO[i];
   const op = s[1].map((x, n) => \`\${n + 1}. \${x}\`).join('\\n');
