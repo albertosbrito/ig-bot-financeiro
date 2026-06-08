@@ -59,7 +59,7 @@ replaceOnce(
     return;
   }
 
-  if (ehConcurso(textoNormalizado)) {
+  if (ehConcurso(textoNormalizado) || ehInteresseConcurso(textoNormalizado)) {
     const sender = fromId || \`comment_\${commentId}\`;
     const resposta = quizConcurso(sender, text, true);
     if (ENVIAR_PRIVATE_REPLY) await enviarPrivateReply(commentId, Array.isArray(resposta) ? resposta[0] : resposta);
@@ -99,7 +99,7 @@ replaceOnce(
     return;
   }
 
-  if (estado?.etapa === 'QUIZ_CONCURSO_LOCAL' || ehConcurso(textoNormalizado)) {
+  if (estado?.etapa === 'QUIZ_CONCURSO_LOCAL' || ehConcurso(textoNormalizado) || ehInteresseConcurso(textoNormalizado)) {
     const resposta = quizConcurso(senderId, text, estado?.etapa !== 'QUIZ_CONCURSO_LOCAL');
     const mensagens = Array.isArray(resposta) ? resposta : [resposta];
     for (const mensagem of mensagens) {
@@ -124,6 +124,20 @@ const QUIZ_CONCURSO = [
   ['Sua prova está próxima?', ['Sim, tenho pouco tempo', 'Tenho algumas semanas', 'Ainda não saiu a data', 'Estou estudando com calma', 'Quero deixar o material salvo']]
 ];
 function ehConcurso(t) { return String(t || '').includes('CONCURSO'); }
+function ehInteresseConcurso(t) {
+  const texto = String(t || '');
+  return (
+    texto.includes('TENHO INTERESSE') ||
+    texto.includes('QUERIA MAIS INFORMACOES') ||
+    texto.includes('QUERIA MAIS INFORMAÇÕES') ||
+    texto.includes('QUERO MAIS INFORMACOES') ||
+    texto.includes('QUERO MAIS INFORMAÇÕES') ||
+    texto.includes('MAIS INFORMACOES POR FAVOR') ||
+    texto.includes('MAIS INFORMAÇÕES POR FAVOR') ||
+    texto.includes('MAIS INFORMACOES') ||
+    texto.includes('MAIS INFORMAÇÕES')
+  );
+}
 function ehPedidoAmostraConcurso(t) {
   const texto = String(t || '');
   return (
