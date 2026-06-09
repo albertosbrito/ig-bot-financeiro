@@ -123,6 +123,11 @@ function fluxoLocalComentario({ textoNormalizado, textoOriginal, senderId }) {
   if (produto) {
     return iniciarFunilProdutoLocal(produto, senderId, 'COMENTARIO — INICIO FUNIL PRODUTO');
   }
+  if (ehNumeroMaterialSoltoLocal(textoNormalizado)) {
+    const dados = estadoInicialEscolhaProdutoLocal();
+    const mensagens = responderFunilProdutoLocal(senderId, textoOriginal, { dados });
+    return { mensagem: mensagens[0], tipo: 'COMENTARIO — MATERIAL NUMERICO' };
+  }
   if (ehPerguntaPrecoFunilLocal(textoNormalizado) || ehInteresseGenericoFunilLocal(textoNormalizado)) {
     return iniciarFunilProdutoLocal(null, senderId, 'COMENTARIO — FUNIL GENERICO');
   }
@@ -135,6 +140,11 @@ function fluxoLocalComentario({ textoNormalizado, textoOriginal, senderId }) {
 function fluxoLocalDirect({ senderId, textoOriginal, textoNormalizado, estado, event }) {
   if (estado?.etapa === 'FUNIL_PRODUTO_LOCAL') {
     return { mensagens: responderFunilProdutoLocal(senderId, textoOriginal, estado), tipo: 'DIRECT — FUNIL PRODUTO' };
+  }
+
+  if (ehNumeroMaterialSoltoLocal(textoNormalizado)) {
+    const dados = estadoInicialEscolhaProdutoLocal();
+    return { mensagens: responderFunilProdutoLocal(senderId, textoOriginal, { dados }), tipo: 'DIRECT — MATERIAL NUMERICO' };
   }
 
   const referralTexto = extrairTextoReferral(event);
@@ -157,6 +167,10 @@ function fluxoLocalDirect({ senderId, textoOriginal, textoNormalizado, estado, e
   return null;
 }
 
+function estadoInicialEscolhaProdutoLocal() {
+  return { produto: null, etapa: 'ESCOLHER_PRODUTO', respostas: [] };
+}
+
 function detectarProdutoFunilLocal(textoNormalizado, referralTexto = '', estado = null) {
   const textos = [textoNormalizado, normalizar(referralTexto || ''), normalizar(estado?.dados?.produto || '')].filter(Boolean).join(' ');
   for (const [chave, produto] of Object.entries(PRODUTOS_FUNIL_LOCAL)) {
@@ -172,7 +186,7 @@ function iniciarFunilProdutoLocal(produto, senderId, tipo = 'FUNIL PRODUTO') {
 }
 
 function responderFunilProdutoLocal(senderId, textoOriginal, estadoAtual) {
-  const dados = estadoAtual?.dados || { produto: null, etapa: 'ESCOLHER_PRODUTO', respostas: [] };
+  const dados = estadoAtual?.dados || estadoInicialEscolhaProdutoLocal();
   const numero = Number(String(textoOriginal || '').replace(/[^0-9]/g, ''));
 
   if (!dados.produto) {
@@ -251,6 +265,10 @@ function ehInteresseGenericoFunilLocal(t) {
 function ehPedidoAmostraFunilLocal(t) {
   const texto = String(t || '');
   return texto.includes('AMOSTRA') || texto.includes('PREVIA') || texto.includes('PRÉVIA') || texto.includes('VER POR DENTRO') || texto.includes('POSSO VER') || texto.includes('QUERO VER') || texto.includes('EXEMPLO DO MATERIAL');
+}
+function ehNumeroMaterialSoltoLocal(t) {
+  const valor = String(t || '').replace(/[^0-9]/g, '');
+  return /^[1-5]$/.test(valor);
 }
 
 // ================= EXECUÇÃO DAS DECISÕES DA IA =================`,
