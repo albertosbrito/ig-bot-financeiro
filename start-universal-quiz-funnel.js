@@ -34,6 +34,12 @@ BOT_NEGOCIO_CONTEXT = BOT_NEGOCIO_CONTEXT
 );
 
 patch(
+  "const ENTREGAS = carregarEntregas();",
+  "const ENTREGAS = normalizarEntregasCheckoutLocal(carregarEntregas());",
+  'normalizar links entregas'
+);
+
+patch(
   `  console.log(\`💬 Comentário recebido de @\${username}: "\${text}"\`);
   console.log(\`🧩 commentId recebido: \${commentId}\`);
 
@@ -118,6 +124,46 @@ const PRODUTOS_FUNIL_LOCAL = {
   }
 };
 
+function normalizarEntregasCheckoutLocal(entregas = []) {
+  return entregas.map(entrega => {
+    const item = { ...entrega };
+    const nome = normalizar(item.nome || '');
+
+    if (nome.includes('WORD')) {
+      item.link = CHECKOUT_WORD_URL;
+      item.tipo = 'checkout';
+      item.tituloDm = 'Apostila de Word';
+      item.mensagemDm = \`Claro! 😊 A Apostila de Word está na oferta especial por \${PRECO_PROMO}.\\n\\nO acesso é liberado após a confirmação do pagamento via Pix ou cartão.\\n\\nAqui está o link para acessar:\\n{link}\\n\\nQualquer dúvida, é só responder este chat.\\n\\n— @albertobri7o\`;
+    }
+
+    if (nome.includes('EXCEL')) {
+      item.link = CHECKOUT_EXCEL_URL;
+      item.tipo = 'checkout';
+      item.tituloDm = 'Kit Excel Básico';
+      item.mensagemDm = \`Boa escolha! 🙌 O Kit Excel Básico é direto ao ponto: fórmulas, atalhos e tabelas para você destravar o Excel no trabalho.\\n\\nOferta especial de Dia dos Namorados: \${PRECO_PROMO}.\\n\\nO acesso é liberado após a confirmação do pagamento via Pix ou cartão.\\n\\nAqui está o link para acessar:\\n{link}\\n\\nQualquer dúvida, é só responder este chat.\\n\\n— @albertobri7o\`;
+    }
+
+    if (nome.includes('CONCURSO')) {
+      item.link = CHECKOUT_CONCURSO_URL;
+      item.tipo = 'checkout';
+      item.tituloDm = 'Apostila Informática para Concurso';
+      item.mensagemDm = String(item.mensagemDm || '')
+        .replace(/R\\$\\s*47/g, PRECO_PROMO)
+        .replace(/Ele custava R\\$\\s*97, mas como é lançamento, você vai pagar R\\$\\s*47[^\\n]*/gi, \`Oferta especial de Dia dos Namorados: hoje você acessa por \${PRECO_PROMO}.\`);
+    }
+
+    if (nome.includes('INTERNET')) {
+      item.link = CHECKOUT_INTERNET_URL;
+      item.tipo = 'checkout';
+      item.tituloDm = 'eBook Internet 2.0';
+      item.mensagemDm = String(item.mensagemDm || '')
+        .replace(/R\\$\\s*37/g, PRECO_PROMO);
+    }
+
+    return item;
+  });
+}
+
 function fluxoLocalComentario({ textoNormalizado, textoOriginal, senderId }) {
   const produto = detectarProdutoFunilLocal(textoNormalizado, '', null);
   if (produto) {
@@ -128,8 +174,11 @@ function fluxoLocalComentario({ textoNormalizado, textoOriginal, senderId }) {
     const mensagens = responderFunilProdutoLocal(senderId, textoOriginal, { dados });
     return { mensagem: mensagens[0], tipo: 'COMENTARIO — MATERIAL NUMERICO' };
   }
-  if (ehPerguntaPrecoFunilLocal(textoNormalizado) || ehInteresseGenericoFunilLocal(textoNormalizado)) {
-    return iniciarFunilProdutoLocal(null, senderId, 'COMENTARIO — FUNIL GENERICO');
+  if (ehPerguntaPrecoFunilLocal(textoNormalizado)) {
+    return iniciarFunilProdutoLocal(null, senderId, 'COMENTARIO — FUNIL PRECO', true);
+  }
+  if (ehInteresseGenericoFunilLocal(textoNormalizado)) {
+    return iniciarFunilProdutoLocal(null, senderId, 'COMENTARIO — FUNIL INFORMACOES', false);
   }
   if (ehPedidoAmostraFunilLocal(textoNormalizado)) {
     return { mensagem: mensagemAmostraOuEscolhaLocal(null), tipo: 'COMENTARIO — AMOSTRA' };
@@ -155,12 +204,17 @@ function fluxoLocalDirect({ senderId, textoOriginal, textoNormalizado, estado, e
   }
 
   if (produto) {
-    const inicio = iniciarFunilProdutoLocal(produto, senderId, 'DIRECT — INICIO FUNIL PRODUTO');
+    const inicio = iniciarFunilProdutoLocal(produto, senderId, 'DIRECT — INICIO FUNIL PRODUTO', false);
     return { mensagens: [inicio.mensagem], tipo: inicio.tipo };
   }
 
-  if (ehPerguntaPrecoFunilLocal(textoNormalizado) || ehInteresseGenericoFunilLocal(textoNormalizado)) {
-    const inicio = iniciarFunilProdutoLocal(null, senderId, 'DIRECT — FUNIL GENERICO');
+  if (ehPerguntaPrecoFunilLocal(textoNormalizado)) {
+    const inicio = iniciarFunilProdutoLocal(null, senderId, 'DIRECT — FUNIL PRECO', true);
+    return { mensagens: [inicio.mensagem], tipo: inicio.tipo };
+  }
+
+  if (ehInteresseGenericoFunilLocal(textoNormalizado)) {
+    const inicio = iniciarFunilProdutoLocal(null, senderId, 'DIRECT — FUNIL INFORMACOES', false);
     return { mensagens: [inicio.mensagem], tipo: inicio.tipo };
   }
 
@@ -179,9 +233,9 @@ function detectarProdutoFunilLocal(textoNormalizado, referralTexto = '', estado 
   return null;
 }
 
-function iniciarFunilProdutoLocal(produto, senderId, tipo = 'FUNIL PRODUTO') {
+function iniciarFunilProdutoLocal(produto, senderId, tipo = 'FUNIL PRODUTO', mostrarPreco = false) {
   const dados = { produto: produto || null, etapa: produto ? 'OBJETIVO' : 'ESCOLHER_PRODUTO', respostas: [] };
-  const mensagem = produto ? montarPerguntaProdutoLocal(produto, true) : montarPerguntaEscolherProdutoLocal(true);
+  const mensagem = produto ? montarPerguntaProdutoLocal(produto, true, mostrarPreco) : montarPerguntaEscolherProdutoLocal(true, mostrarPreco);
   return { mensagem, estado: { etapa: 'FUNIL_PRODUTO_LOCAL', dados }, tipo };
 }
 
@@ -197,13 +251,13 @@ function responderFunilProdutoLocal(senderId, textoOriginal, estadoAtual) {
     }
     const produto = mapa[numero - 1];
     setEstadoDirect(senderId, 'FUNIL_PRODUTO_LOCAL', { produto, etapa: 'OBJETIVO', respostas: [] });
-    return [montarPerguntaProdutoLocal(produto, true)];
+    return [montarPerguntaProdutoLocal(produto, true, false)];
   }
 
   const produto = PRODUTOS_FUNIL_LOCAL[dados.produto];
   if (!produto) {
     clearEstadoDirect(senderId);
-    return [montarPerguntaEscolherProdutoLocal(true)];
+    return [montarPerguntaEscolherProdutoLocal(true, false)];
   }
 
   if (!Number.isInteger(numero) || numero < 1 || numero > produto.opcoes.length) {
@@ -216,20 +270,22 @@ function responderFunilProdutoLocal(senderId, textoOriginal, estadoAtual) {
   return montarOfertaProdutoLocal(dados.produto, objetivo);
 }
 
-function montarPerguntaEscolherProdutoLocal(comIntro = false) {
+function montarPerguntaEscolherProdutoLocal(comIntro = false, mostrarPreco = false) {
   const pergunta = 'Para eu te mandar o acesso certo, qual material você quer?\\n\\n1. Word\\n2. Excel\\n3. Internet 2.0\\n4. Informática para Concurso\\n5. Planilha Financeira';
-  return comIntro
+  if (!comIntro) return pergunta;
+  return mostrarPreco
     ? \`Claro! 😊\\n\\nA oferta especial de Dia dos Namorados está por \${PRECO_PROMO}.\\n\\nAntes de te mandar um link, me responde rapidinho:\\n\\n\${pergunta}\`
-    : pergunta;
+    : \`Perfeito! Vou te ajudar a escolher o material certo para o seu momento. 😊\\n\\nAntes de te mandar um link, me responde rapidinho:\\n\\n\${pergunta}\`;
 }
 
-function montarPerguntaProdutoLocal(produtoKey, comIntro = false) {
+function montarPerguntaProdutoLocal(produtoKey, comIntro = false, mostrarPreco = false) {
   const produto = PRODUTOS_FUNIL_LOCAL[produtoKey];
   const opcoes = produto.opcoes.map((op, i) => \`\${i + 1}. \${op}\`).join('\\n');
   const pergunta = \`\${produto.pergunta}\\n\\n\${opcoes}\`;
-  return comIntro
+  if (!comIntro) return pergunta;
+  return mostrarPreco
     ? \`Claro! 😊\\n\\nA oferta especial está por \${PRECO_PROMO} hoje.\\n\\nAntes de te mandar o acesso certo, me responde rapidinho:\\n\\n\${pergunta}\`
-    : pergunta;
+    : \`Perfeito! Vou te ajudar a escolher o acesso certo. 😊\\n\\nAntes de te mandar o link, me responde rapidinho:\\n\\n\${pergunta}\`;
 }
 
 function montarOfertaProdutoLocal(produtoKey, objetivo) {
@@ -251,7 +307,7 @@ function mensagemAmostraOuEscolhaLocal(produtoKey) {
   if (produtoKey === 'CONCURSO' || !produtoKey) {
     return \`Claro. Separei uma amostra gratuita da apostila Informática para Concurso para você ver o estilo do material antes de comprar.\\n\\nBaixe aqui 👇\\n\${AMOSTRA_CONCURSO_URL}\\n\\nDepois me responde com o número do material que você quer conhecer melhor.\`;
   }
-  return montarPerguntaProdutoLocal(produtoKey, true);
+  return montarPerguntaProdutoLocal(produtoKey, true, false);
 }
 
 function ehPerguntaPrecoFunilLocal(t) {
