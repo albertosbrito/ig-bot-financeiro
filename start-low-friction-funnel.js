@@ -24,11 +24,11 @@ const CHECKOUT_INTERNET_URL = String(process.env.CHECKOUT_INTERNET_URL || 'https
 const AMOSTRA_CONCURSO_URL = String(process.env.AMOSTRA_CONCURSO_URL || 'https://drive.google.com/file/d/1APNGWFN-lEzjDIvXYYaHI0nGpQg8cOo5/view?usp=drivesdk').trim();
 let BOT_NEGOCIO_CONTEXT = String(process.env.BOT_NEGOCIO_CONTEXT || '').trim();
 BOT_NEGOCIO_CONTEXT = BOT_NEGOCIO_CONTEXT
-  .replace(/Word\\s*[:—-]\\s*cortesia\\s*\\((grátis|gratis)\\)/gi, \`Word — \${PRECO_PROMO}\`)
-  .replace(/Planilha Financeira\\s*[:—-]\\s*cortesia\\s*\\((grátis|gratis)\\)/gi, \`Planilha Financeira — inclusa no Kit Excel Básico\`)
-  .replace(/Informática para Concurso\\s*[:—-]\\s*R\\$\\s*47/gi, \`Informática para Concurso — \${PRECO_PROMO}\`)
-  .replace(/Excel \\(Kit Excel Básico\\)\\s*[:—-]\\s*R\\$\\s*37/gi, \`Excel (Kit Excel Básico) — \${PRECO_PROMO}\`)
-  .replace(/Internet 2\\.0\\s*[:—-]\\s*R\\$\\s*37/gi, \`Internet 2.0 — \${PRECO_PROMO}\`);`,
+  .replace(/Word\\s*[:—-]\\s*cortesia\\s*\\((grátis|gratis)\\)/gi, 'Word — ' + PRECO_PROMO)
+  .replace(/Planilha Financeira\\s*[:—-]\\s*cortesia\\s*\\((grátis|gratis)\\)/gi, 'Planilha Financeira — inclusa no Kit Excel Básico')
+  .replace(/Informática para Concurso\\s*[:—-]\\s*R\\$\\s*47/gi, 'Informática para Concurso — ' + PRECO_PROMO)
+  .replace(/Excel \\(Kit Excel Básico\\)\\s*[:—-]\\s*R\\$\\s*37/gi, 'Excel (Kit Excel Básico) — ' + PRECO_PROMO)
+  .replace(/Internet 2\\.0\\s*[:—-]\\s*R\\$\\s*37/gi, 'Internet 2.0 — ' + PRECO_PROMO);`,
   'config baixo atrito'
 );
 
@@ -217,7 +217,7 @@ function respostaEscolhaMaterial(comPreco, senderId, tipo) {
 
 function mensagemEscolhaMaterial(comPreco = false) {
   if (comPreco) {
-    return `Cada material está por ${PRECO_PROMO}, com acesso liberado após o pagamento. 😊\\n\\nMe diz qual você quer que eu já te mando o link: Word, Excel, Internet 2.0 ou Informática para Concurso.`;
+    return 'Cada material está por ' + PRECO_PROMO + ', com acesso liberado após o pagamento. 😊\\n\\nMe diz qual você quer que eu já te mando o link: Word, Excel, Internet 2.0 ou Informática para Concurso.';
   }
   return 'Show! Pra eu te mandar o acesso certo, qual material te interessa? Word, Excel, Internet 2.0 ou Informática para Concurso? 😊';
 }
@@ -226,17 +226,17 @@ function mensagemCheckoutProduto(produtoKey) {
   const produto = PRODUTOS_BAIXO_ATRITO[produtoKey];
   if (!produto) return [mensagemEscolhaMaterial(false)];
   return [
-    `Perfeito! ${produto.pitch}\\n\\nHoje ele está por ${PRECO_PROMO}, com acesso liberado após o pagamento.`,
-    `Aqui está o link para garantir agora 👇\\n${produto.checkout}\\n\\nQualquer dúvida, me chama aqui.`
+    'Perfeito! ' + produto.pitch + '\\n\\nHoje ele está por ' + PRECO_PROMO + ', com acesso liberado após o pagamento.',
+    'Aqui está o link para garantir agora 👇\\n' + produto.checkout + '\\n\\nQualquer dúvida, me chama aqui.'
   ];
 }
 
 function mensagemAmostraBaixoAtrito() {
-  return `Claro. Separei uma amostra gratuita da apostila Informática para Concurso para você ver o estilo do material antes de comprar.\\n\\nBaixe aqui 👇\\n${AMOSTRA_CONCURSO_URL}\\n\\nO material completo está por ${PRECO_PROMO}. Se quiser, me diga o material que eu te mando o link.`;
+  return 'Claro. Separei uma amostra gratuita da apostila Informática para Concurso para você ver o estilo do material antes de comprar.\\n\\nBaixe aqui 👇\\n' + AMOSTRA_CONCURSO_URL + '\\n\\nO material completo está por ' + PRECO_PROMO + '. Se quiser, me diga o material que eu te mando o link.';
 }
 
 function detectarProdutoBaixoAtrito(textoNormalizado, referralTexto = '') {
-  const texto = `${textoNormalizado || ''} ${normalizar(referralTexto || '')}`;
+  const texto = String(textoNormalizado || '') + ' ' + normalizar(referralTexto || '');
   for (const [key, produto] of Object.entries(PRODUTOS_BAIXO_ATRITO)) {
     if (produto.keywords.some(k => contemPalavraOuFrase(texto, normalizar(k)))) return key;
   }
@@ -261,7 +261,7 @@ function ehPerguntaPrecoBaixoAtrito(t) {
 
 function ehInteresseGenericoBaixoAtrito(t) {
   const texto = String(t || '');
-  return texto.includes('TENHO INTERESSE') || texto.includes('QUERIA MAIS INFORMACOES') || texto.includes('QUERIA MAIS INFORMAÇÕES') || texto.includes('QUERO MAIS INFORMACOES') || texto.includes('QUERO MAIS INFORMAÇÕES') || texto.includes('MAIS INFORMACOES') || texto.includes('MAIS INFORMAÇÕES') || texto.includes('CONHECER OS MATERIAIS') || texto.includes('CONHECER MATERIAIS') || texto.includes('QUERO CONHECER') || texto.includes('QUAIS MATERIAIS') || texto.includes('LISTA DE MATERIAIS') || texto.includes('MATERIAIS DISPONIVEIS') || texto.includes('MATERIAIS DISPONÍVEIS') || texto.includes('MATERIAIS') || texto.includes('COMO FUNCIONA') || texto.includes('DETALHES');
+  return texto.includes('TENHO INTERESSE') || texto.includes('QUERIA MAIS INFORMACOES') || texto.includes('QUERIA MAIS INFORMAÇÕES') || texto.includes('QUERO MAIS INFORMACOES') || texto.includes('QUERO MAIS INFORMAÇÕES') || texto.includes('MAIS INFORMACOES') || texto.includes('MAIS INFORMAÇÕES') || texto.includes('CONHECER OS MATERIAIS') || texto.includes('CONHECER MATERIAIS') || texto.includes('QUERO CONHECER') || texto.includes('QUAIS MATERIAIS') || texto.includes('LISTA DE MATERIAIS') || texto.includes('MATERIAIS DISPONIVEIS') || texto.includes('MATERIAIS DISPONÍVEIS') || texto.includes('MATERIAIS') || texto.includes('TEM CURSO') || texto.includes('TEM CURSOS') || texto.includes('CURSO') || texto.includes('CURSOS') || texto.includes('AULA') || texto.includes('AULAS') || texto.includes('COMO FUNCIONA') || texto.includes('DETALHES');
 }
 
 function ehPedidoAmostraBaixoAtrito(t) {
