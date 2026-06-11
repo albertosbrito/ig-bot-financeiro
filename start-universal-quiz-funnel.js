@@ -242,14 +242,25 @@ function iniciarFunilProdutoLocal(produto, senderId, tipo = 'FUNIL PRODUTO', mos
 function responderFunilProdutoLocal(senderId, textoOriginal, estadoAtual) {
   const dados = estadoAtual?.dados || estadoInicialEscolhaProdutoLocal();
   const numero = Number(String(textoOriginal || '').replace(/[^0-9]/g, ''));
+  const textoLimpo = limparTextoOpcaoLocal(textoOriginal);
 
   if (!dados.produto) {
     const mapa = ['WORD', 'EXCEL', 'INTERNET', 'CONCURSO', 'FINANCEIRO'];
-    if (!Number.isInteger(numero) || numero < 1 || numero > mapa.length) {
-      setEstadoDirect(senderId, 'FUNIL_PRODUTO_LOCAL', dados);
-      return ['Responda apenas com o número da opção, por favor.'];
+    const nomesMateriais = ['Word', 'Excel', 'Internet 2.0', 'Informática para Concurso', 'Planilha Financeira'];
+    let indiceMaterial = -1;
+
+    if (Number.isInteger(numero) && numero >= 1 && numero <= mapa.length) {
+      indiceMaterial = numero - 1;
+    } else {
+      indiceMaterial = encontrarIndiceOpcaoLocal(textoLimpo, nomesMateriais);
     }
-    const produto = mapa[numero - 1];
+
+    if (indiceMaterial < 0) {
+      setEstadoDirect(senderId, 'FUNIL_PRODUTO_LOCAL', dados);
+      return ['Não consegui identificar o material. Pode responder com o nome dele? Ex.: Word, Excel, Internet, Informática para Concurso ou Planilha Financeira.'];
+    }
+
+    const produto = mapa[indiceMaterial];
     setEstadoDirect(senderId, 'FUNIL_PRODUTO_LOCAL', { produto, etapa: 'OBJETIVO', respostas: [] });
     return [montarPerguntaProdutoLocal(produto, true, false)];
   }
@@ -260,14 +271,49 @@ function responderFunilProdutoLocal(senderId, textoOriginal, estadoAtual) {
     return [montarPerguntaEscolherProdutoLocal(true, false)];
   }
 
-  if (!Number.isInteger(numero) || numero < 1 || numero > produto.opcoes.length) {
-    setEstadoDirect(senderId, 'FUNIL_PRODUTO_LOCAL', dados);
-    return ['Responda apenas com o número da alternativa, por favor.'];
+  let indiceOpcao = -1;
+  if (Number.isInteger(numero) && numero >= 1 && numero <= produto.opcoes.length) {
+    indiceOpcao = numero - 1;
+  } else {
+    indiceOpcao = encontrarIndiceOpcaoLocal(textoLimpo, produto.opcoes);
   }
 
-  const objetivo = produto.opcoes[numero - 1];
+  if (indiceOpcao < 0) {
+    setEstadoDirect(senderId, 'FUNIL_PRODUTO_LOCAL', dados);
+    return ['Não consegui identificar a alternativa. Pode responder com uma palavra da opção? Ex.: trabalho, concurso, faculdade, começar do zero.'];
+  }
+
+  const objetivo = produto.opcoes[indiceOpcao];
   clearEstadoDirect(senderId);
   return montarOfertaProdutoLocal(dados.produto, objetivo);
+}
+
+function limparTextoOpcaoLocal(valor = '') {
+  return normalizar(valor)
+    .replace(/[^A-Z0-9 ]/g, ' ')
+    .replace(/\\s+/g, ' ')
+    .trim();
+}
+
+function encontrarIndiceOpcaoLocal(textoLimpo, opcoes = []) {
+  if (!textoLimpo) return -1;
+
+  const palavrasTexto = textoLimpo.split(' ').filter(p => p.length >= 3);
+
+  for (let i = 0; i < opcoes.length; i++) {
+    const opcaoLimpa = limparTextoOpcaoLocal(opcoes[i]);
+    if (!opcaoLimpa) continue;
+
+    if (textoLimpo === opcaoLimpa) return i;
+    if (opcaoLimpa.includes(textoLimpo) && textoLimpo.length >= 3) return i;
+    if (textoLimpo.includes(opcaoLimpa) && opcaoLimpa.length >= 3) return i;
+
+    const palavrasOpcao = opcaoLimpa.split(' ').filter(p => p.length >= 3);
+    const bateuPalavra = palavrasTexto.some(p => palavrasOpcao.includes(p));
+    if (bateuPalavra) return i;
+  }
+
+  return -1;
 }
 
 function montarPerguntaEscolherProdutoLocal(comIntro = false, mostrarPreco = false) {
