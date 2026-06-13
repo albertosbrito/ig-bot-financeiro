@@ -4,7 +4,7 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node start-word-direct-wrapper.js"
+    "start": "node start-universal-quiz-funnel.js"
   },
   "dependencies": {
     "express": "^4.18.3",
