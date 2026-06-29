@@ -1,10 +1,10 @@
 {
   "name": "bot-instagram-comentarios",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node start-human-control.js"
+    "start": "node start-runtime.js"
   },
   "dependencies": {
     "express": "^4.18.3",
